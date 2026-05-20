@@ -29,6 +29,7 @@
     --radius-sm: 4px;
     --radius:    6px;
     --radius-lg: 8px;
+    --analysis-control-width: 560px;
   }
 
   * { box-sizing: border-box; }
@@ -155,11 +156,13 @@
     gap: 10px;
     align-items: stretch;
     margin-block-end: 14px;
+    inline-size: min(100%, var(--analysis-control-width));
+    max-inline-size: 100%;
   }
   .input-wrap {
     position: relative;
     flex: 1;
-    max-width: 480px;
+    min-width: 0;
   }
   .input-wrap input {
     inline-size: 100%;
@@ -225,6 +228,7 @@
     gap: 6px;
     align-items: center;
     margin-block-end: 48px;
+    max-inline-size: min(100%, var(--analysis-control-width));
   }
   .suggest-label {
     font-size: 12px;
@@ -790,6 +794,12 @@
   @media (max-width: 860px) {
     main {
       padding: 40px 18px 84px;
+    }
+    .input-row {
+      inline-size: 100%;
+    }
+    .input-wrap {
+      max-width: none;
     }
     .workbench-shell {
       display: grid;
