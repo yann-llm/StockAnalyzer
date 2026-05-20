@@ -1,0 +1,517 @@
+"""Read local Eastmoney cache files and build UI-friendly summaries."""
+
+from __future__ import annotations
+
+import json
+import re
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+
+PROJECT_DIR = Path(__file__).resolve().parents[2]
+DATA_DIR = PROJECT_DIR / "data"
+EXPECTED_MODULES = ("financial", "industry", "notice_risk", "stockcomment", "valuation")
+
+
+class DataStoreError(Exception):
+    """Base error for local data access."""
+
+
+class StockNotFoundError(DataStoreError):
+    """Raised when no local cache exists for a stock code."""
+
+
+class ModuleDataError(DataStoreError):
+    """Raised when a module points to unreadable data."""
+
+
+def normalize_stock_code(stock_code: str) -> str:
+    code = stock_code.strip()
+    if not re.fullmatch(r"\d{6}", code):
+        raise ValueError("stock_code must be a 6 digit A-share code")
+    return code
+
+
+def read_json(path: Path) -> dict[str, Any]:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ModuleDataError(f"missing file: {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise ModuleDataError(f"invalid json: {path}") from exc
+
+
+def stock_dir(stock_code: str) -> Path:
+    return DATA_DIR / normalize_stock_code(stock_code)
+
+
+def manifest_path(stock_code: str) -> Path:
+    return stock_dir(stock_code) / "cache_manifest.json"
+
+
+def list_stock_codes() -> list[str]:
+    if not DATA_DIR.exists():
+        return []
+    return sorted(
+        child.name
+        for child in DATA_DIR.iterdir()
+        if child.is_dir() and re.fullmatch(r"\d{6}", child.name) and (child / "cache_manifest.json").exists()
+    )
+
+
+def load_manifest(stock_code: str) -> dict[str, Any]:
+    path = manifest_path(stock_code)
+    if not path.exists():
+        raise StockNotFoundError(f"no local cache for stock {normalize_stock_code(stock_code)}")
+    return read_json(path)
+
+
+def load_cleaned_module(stock_code: str, module_name: str) -> dict[str, Any]:
+    code = normalize_stock_code(stock_code)
+    manifest = load_manifest(code)
+    info = manifest.get("modules", {}).get(module_name)
+    if not isinstance(info, dict):
+        raise ModuleDataError(f"module not recorded in manifest: {module_name}")
+    cleaned_file = info.get("cleaned_file")
+    if not cleaned_file:
+        raise ModuleDataError(f"module has no cleaned file: {module_name}")
+    return read_json(stock_dir(code) / cleaned_file)
+
+
+def load_analysis_module(stock_code: str, module_name: str, modules: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+    info = modules.get(module_name, {})
+    analysis_file = info.get("analysis_file")
+    if not analysis_file:
+        return None
+    try:
+        return read_json(stock_dir(stock_code) / analysis_file)
+    except DataStoreError:
+        return None
+
+
+def build_stocks_index() -> list[dict[str, Any]]:
+    return [build_stock_index_item(code) for code in list_stock_codes()]
+
+
+def build_stock_index_item(stock_code: str) -> dict[str, Any]:
+    manifest = load_manifest(stock_code)
+    modules = manifest.get("modules", {})
+    success_count = sum(1 for info in modules.values() if isinstance(info, dict) and info.get("status") == "success")
+    item = {
+        "stock_code": normalize_stock_code(stock_code),
+        "stock_name": None,
+        "market_code": market_code(stock_code),
+        "generated_at": manifest.get("generated_at"),
+        "expires_at": manifest.get("expires_at"),
+        "modules_total": len(EXPECTED_MODULES),
+        "modules_success": success_count,
+    }
+    try:
+        valuation = load_cleaned_module(stock_code, "valuation")
+        item["stock_name"] = dig(valuation, "data", "latest", "stock_name")
+        item["industry_name"] = dig(valuation, "data", "latest", "board_name")
+    except DataStoreError:
+        pass
+    return item
+
+
+def build_stock_summary(stock_code: str) -> dict[str, Any]:
+    code = normalize_stock_code(stock_code)
+    manifest = load_manifest(code)
+    modules = build_module_statuses(code, manifest)
+    cleaned = load_successful_modules(code, modules)
+    analysis = load_successful_analysis(code, modules)
+
+    valuation_latest = dig(cleaned.get("valuation"), "data", "latest") or {}
+    industry_data = dig(cleaned.get("industry"), "data") or {}
+    stock_name = valuation_latest.get("stock_name") or dig(industry_data, "stock_industry_mapping", "stock", "name") or code
+    industry_name = (
+        valuation_latest.get("board_name")
+        or industry_data.get("industry_name")
+        or dig(industry_data, "stock_industry_mapping", "industry_name")
+    )
+
+    return {
+        "stock_code": code,
+        "stock_name": stock_name,
+        "market_code": market_code(code),
+        "generated_at": format_datetime(manifest.get("generated_at")),
+        "expires_at": format_datetime(manifest.get("expires_at")),
+        "cache_hit": all(info.get("status") == "success" for info in modules.values()),
+        "data_source": f"data/{code}/cleaned/",
+        "modules": modules,
+        "metrics": build_metrics(cleaned),
+        "risk_flags": collect_risk_flags(cleaned),
+        "sections": build_sections(cleaned, analysis, stock_name, industry_name),
+    }
+
+
+def build_module_statuses(stock_code: str, manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    statuses: dict[str, dict[str, Any]] = {}
+    manifest_modules = manifest.get("modules", {})
+    for module_name in EXPECTED_MODULES:
+        info = manifest_modules.get(module_name, {})
+        cleaned_file = info.get("cleaned_file") if isinstance(info, dict) else None
+        file_exists = bool(cleaned_file and (stock_dir(stock_code) / cleaned_file).exists())
+        status = info.get("status", "missing") if isinstance(info, dict) else "missing"
+        if status == "success" and not file_exists:
+            status = "missing_file"
+        statuses[module_name] = {
+            "status": status,
+            "cleaned_file": cleaned_file,
+            "analysis_status": info.get("analysis_status") if isinstance(info, dict) else None,
+            "analysis_file": info.get("analysis_file") if isinstance(info, dict) else None,
+            "file_exists": file_exists,
+            "error": info.get("error") if isinstance(info, dict) else None,
+        }
+    return statuses
+
+
+def load_successful_modules(stock_code: str, modules: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    cleaned: dict[str, dict[str, Any]] = {}
+    for module_name, info in modules.items():
+        if info.get("status") != "success":
+            continue
+        try:
+            cleaned[module_name] = load_cleaned_module(stock_code, module_name)
+        except DataStoreError:
+            continue
+    return cleaned
+
+
+def load_successful_analysis(stock_code: str, modules: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    analysis: dict[str, dict[str, Any]] = {}
+    for module_name, info in modules.items():
+        if info.get("analysis_status") != "success":
+            continue
+        payload = load_analysis_module(stock_code, module_name, modules)
+        if payload is not None:
+            analysis[module_name] = payload
+    return analysis
+
+
+def build_metrics(cleaned: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    financial_latest = dig(cleaned.get("financial"), "data", "latest") or {}
+    valuation_latest = dig(cleaned.get("valuation"), "data", "latest") or {}
+    industry_data = dig(cleaned.get("industry"), "data") or {}
+    stockcomment_data = dig(cleaned.get("stockcomment"), "data") or {}
+    return {
+        "revenue": financial_latest.get("revenue"),
+        "revenue_yoy": financial_latest.get("revenue_yoy"),
+        "net_profit": financial_latest.get("net_profit"),
+        "net_profit_yoy": financial_latest.get("net_profit_yoy"),
+        "roe": financial_latest.get("roe"),
+        "operating_cash_flow": financial_latest.get("operating_cash_flow"),
+        "pe_ttm": valuation_latest.get("pe_ttm"),
+        "pb_mrq": valuation_latest.get("pb_mrq"),
+        "peg": valuation_latest.get("peg"),
+        "industry_name": valuation_latest.get("board_name") or industry_data.get("industry_name"),
+        "industry_score": dig(industry_data, "score_summary", "overall_score"),
+        "stock_score": dig(stockcomment_data, "score_features", "evaluation", "total_score"),
+    }
+
+
+def build_sections(
+    cleaned: dict[str, dict[str, Any]],
+    analysis: dict[str, dict[str, Any]],
+    stock_name: str,
+    industry_name: str | None,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "key": "thesis",
+            "title": "投资结论",
+            "body": build_thesis(cleaned, stock_name, industry_name),
+        },
+        {
+            "key": "stockcomment",
+            "title": "千股千评",
+            "body": build_llm_section_text(analysis.get("stockcomment")) or build_stockcomment_section(cleaned.get("stockcomment"))["body"],
+            "items": build_llm_section_items(analysis.get("stockcomment")) or build_stockcomment_section(cleaned.get("stockcomment"))["items"],
+        },
+        {
+            "key": "financial",
+            "title": "财务质量",
+            "body": build_llm_section_text(analysis.get("financial")) or build_financial_section(cleaned.get("financial"))["body"],
+            "items": build_llm_section_items(analysis.get("financial")) or build_financial_section(cleaned.get("financial"))["items"],
+        },
+        {
+            "key": "industry",
+            "title": "行业与资金",
+            "body": build_llm_section_text(analysis.get("industry")) or build_industry_section(cleaned.get("industry"), cleaned.get("stockcomment"))["body"],
+            "items": build_llm_section_items(analysis.get("industry")) or build_industry_section(cleaned.get("industry"), cleaned.get("stockcomment"))["items"],
+        },
+        {
+            "key": "valuation",
+            "title": "估值位置",
+            "body": build_llm_section_text(analysis.get("valuation")) or build_valuation_section(cleaned.get("valuation"))["body"],
+            "items": build_llm_section_items(analysis.get("valuation")) or build_valuation_section(cleaned.get("valuation"))["items"],
+        },
+        {
+            "key": "risk",
+            "title": "主要风险",
+            "body": build_llm_section_text(analysis.get("notice_risk")) or build_risk_section(cleaned)["body"],
+            "items": build_llm_section_items(analysis.get("notice_risk")) or build_risk_section(cleaned)["items"],
+        },
+    ]
+
+
+def build_llm_section_text(payload: dict[str, Any] | None) -> str | None:
+    analysis = payload.get("analysis") if isinstance(payload, dict) else None
+    if not isinstance(analysis, dict):
+        return None
+    items = build_llm_section_items(payload)
+    if not items:
+        return None
+    return "；".join(item["value"] for item in items if item.get("value")) + "。"
+
+
+def build_llm_section_items(payload: dict[str, Any] | None) -> list[dict[str, str]] | None:
+    analysis = payload.get("analysis") if isinstance(payload, dict) else None
+    if not isinstance(analysis, dict):
+        return None
+    items: list[dict[str, str]] = []
+    conclusion = stringify_analysis_value(analysis.get("简短结论"))
+    score = format_score(analysis.get("综合评分"))
+    evidence = stringify_analysis_value(analysis.get("主要依据"))
+    risk = stringify_analysis_value(analysis.get("风险提示"))
+    if conclusion:
+        items.append({"label": "结论", "value": conclusion})
+    if score:
+        items.append({"label": "综合评分", "value": score})
+    if evidence:
+        items.append({"label": "判断依据", "value": evidence})
+    if risk:
+        items.append({"label": "风险提示", "value": risk})
+    return items or None
+
+
+def format_score(value: Any) -> str:
+    if value is None:
+        return ""
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return f"综合评分 {value}"
+    return f"{score:.1f}".rstrip("0").rstrip(".") + " 分"
+
+
+def stringify_analysis_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        return "；".join(str(item).strip() for item in value if str(item).strip())
+    if isinstance(value, dict):
+        return "；".join(
+            f"{key}: {stringify_analysis_value(item)}"
+            for key, item in value.items()
+            if stringify_analysis_value(item)
+        )
+    return str(value)
+
+
+def build_thesis(cleaned: dict[str, dict[str, Any]], stock_name: str, industry_name: str | None) -> str:
+    metrics = build_metrics(cleaned)
+    score_parts = []
+    if metrics.get("stock_score") is not None:
+        score_parts.append(f"个股综合评分 {format_number(metrics['stock_score'])}")
+    if metrics.get("industry_score") is not None:
+        score_parts.append(f"行业景气评分 {format_number(metrics['industry_score'])}")
+    valuation_text = ""
+    if metrics.get("pe_ttm") is not None and metrics.get("pb_mrq") is not None:
+        valuation_text = f"当前 PE(TTM) {format_number(metrics['pe_ttm'])}、PB {format_number(metrics['pb_mrq'])}。"
+    industry_text = f"所属行业为{industry_name}，" if industry_name else ""
+    score_text = "，".join(score_parts) or "本地模块已完成数据聚合"
+    return f"{stock_name}：{industry_text}{score_text}。{valuation_text}建议结合财务增速、资金流和公告风险综合判断。"
+
+
+def build_financial_section(financial: dict[str, Any] | None) -> dict[str, Any]:
+    latest = dig(financial, "data", "latest") or {}
+    if not latest:
+        return {"body": "财务模块暂无可用摘要。", "items": []}
+    evidence = "；".join(
+        [
+            f"营业收入 {format_amount(latest.get('revenue'))}，同比 {format_percent(latest.get('revenue_yoy'))}",
+            f"归母净利润 {format_amount(latest.get('net_profit'))}，同比 {format_percent(latest.get('net_profit_yoy'))}",
+            f"ROE {format_percent(latest.get('roe'))}",
+            f"经营现金流 {format_amount(latest.get('operating_cash_flow'))}",
+        ]
+    )
+    items = [
+        {"label": "结论", "value": "财务质量可结合收入、利润、现金流综合判断。"},
+        {"label": "判断依据", "value": evidence},
+    ]
+    flags = dig(financial, "data", "risk_flags") or []
+    if flags:
+        items.append({"label": "风险提示", "value": "；".join(flag.get("title", "") for flag in flags[:3] if isinstance(flag, dict))})
+    return {"body": "；".join(item["value"] for item in items if item.get("value")) + "。", "items": items}
+
+
+def build_industry_section(industry: dict[str, Any] | None, stockcomment: dict[str, Any] | None) -> dict[str, Any]:
+    data = dig(industry, "data") or {}
+    stockcomment_data = dig(stockcomment, "data") or {}
+    industry_name = data.get("industry_name") or dig(data, "stock_industry_mapping", "industry_name")
+    score = dig(data, "score_summary", "overall_score")
+    today_flow = dig(data, "capital_flow", "periods", "today", "main_net_inflow")
+    five_day_flow = dig(data, "capital_flow", "periods", "5d", "main_net_inflow")
+    trend_comment = dig(stockcomment_data, "score_features", "trend", "trend_comment")
+    conclusion = ""
+    evidence_parts = []
+    risk_parts = []
+    if industry_name:
+        conclusion = f"{industry_name}行业景气评分 {format_number(score) if score is not None else '暂无'}。"
+    if today_flow is not None:
+        evidence_parts.append(f"今日行业主力净流入 {format_amount(today_flow)}")
+    if five_day_flow is not None:
+        evidence_parts.append(f"5 日行业主力净流入 {format_amount(five_day_flow)}")
+    if trend_comment:
+        risk_parts.append(str(trend_comment))
+    items = []
+    if conclusion:
+        items.append({"label": "结论", "value": conclusion})
+    if score is not None:
+        items.append({"label": "综合评分", "value": f"{format_number(score)} 分"})
+    if evidence_parts:
+        items.append({"label": "判断依据", "value": "；".join(evidence_parts)})
+    if risk_parts:
+        items.append({"label": "风险提示", "value": "；".join(risk_parts)})
+    return {"body": "；".join(item["value"] for item in items if item.get("value")) + "。" if items else "行业与资金模块暂无可用摘要。", "items": items}
+
+
+def build_stockcomment_section(stockcomment: dict[str, Any] | None) -> dict[str, Any]:
+    data = dig(stockcomment, "data") or {}
+    features = data.get("score_features") or {}
+    overall = features.get("overall") or {}
+    capital = features.get("capital_flow") or {}
+    technical = features.get("technical") or {}
+    sentiment = features.get("sentiment") or {}
+    if not features:
+        return {"body": "千股千评模块暂无可用摘要。", "items": []}
+    conclusion = str(technical.get("trend_comment") or "")
+    evidence_parts = []
+    risk_parts = []
+    if capital.get("capital_flows") is not None:
+        evidence_parts.append(f"个股资金流 {format_amount(capital.get('capital_flows'))}")
+    if capital.get("capital_flows_5days") is not None:
+        evidence_parts.append(f"5 日资金流 {format_amount(capital.get('capital_flows_5days'))}")
+    if sentiment.get("market_focus") is not None:
+        evidence_parts.append(f"市场关注度 {format_number(sentiment.get('market_focus'))}")
+    flags = data.get("risk_flags") or []
+    if flags:
+        risk_parts.append("；".join(flag.get("title", "") for flag in flags[:2] if isinstance(flag, dict)))
+    items = []
+    if conclusion:
+        items.append({"label": "结论", "value": conclusion})
+    if overall.get("total_score") is not None:
+        items.append({"label": "综合评分", "value": format_number(overall.get("total_score")) + " 分"})
+    if evidence_parts:
+        items.append({"label": "判断依据", "value": "；".join(evidence_parts)})
+    if risk_parts:
+        items.append({"label": "风险提示", "value": "；".join(risk_parts)})
+    return {"body": "；".join(item["value"] for item in items if item.get("value")) + "。" if items else "千股千评模块暂无可用摘要。", "items": items}
+
+
+def build_valuation_section(valuation: dict[str, Any] | None) -> dict[str, Any]:
+    data = dig(valuation, "data") or {}
+    latest = data.get("latest") or {}
+    rank = data.get("industry_rank") or {}
+    percentiles = data.get("industry_percentiles") or {}
+    if not latest:
+        return {"body": "估值模块暂无可用摘要。", "items": []}
+    evidence_parts = [
+        f"PE(TTM) {format_number(latest.get('pe_ttm'))}",
+        f"PB(MRQ) {format_number(latest.get('pb_mrq'))}",
+        f"PEG {format_number(latest.get('peg'))}",
+    ]
+    if rank.get("rank_by_pe_ttm") and rank.get("industry_count"):
+        evidence_parts.append(f"PE 行业排名 {rank['rank_by_pe_ttm']}/{rank['industry_count']}")
+    pe_pct = dig(percentiles, "pe_ttm", "percentile")
+    pb_pct = dig(percentiles, "pb_mrq", "percentile")
+    if pe_pct is not None or pb_pct is not None:
+        evidence_parts.append(f"PE 分位 {format_percent(pe_pct)}，PB 分位 {format_percent(pb_pct)}")
+    items = [
+        {"label": "结论", "value": "估值可用，但需要结合盈利和现金流判断。"},
+        {"label": "判断依据", "value": "；".join(evidence_parts)},
+    ]
+    return {"body": "；".join(item["value"] for item in items if item.get("value")) + "。", "items": items}
+
+
+def build_risk_section(cleaned: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    flags = collect_risk_flags(cleaned, limit=6)
+    if not flags:
+        return {"body": "本地模块未识别到明确风险标签，仍需关注后续公告和行情波动。", "items": []}
+    items = [{"label": "风险提示", "value": "；".join(flag["title"] for flag in flags if flag.get("title"))}]
+    return {"body": items[0]["value"] + "。", "items": items}
+
+
+def collect_risk_flags(cleaned: dict[str, dict[str, Any]], limit: int = 10) -> list[dict[str, Any]]:
+    flags: list[dict[str, Any]] = []
+    for module_name, payload in cleaned.items():
+        for flag in dig(payload, "data", "risk_flags") or []:
+            if not isinstance(flag, dict):
+                continue
+            flags.append(
+                {
+                    "module": module_name,
+                    "level": flag.get("level", "notice"),
+                    "title": flag.get("title") or flag.get("message") or "",
+                    "detail": flag.get("detail") or flag.get("description"),
+                }
+            )
+    return [flag for flag in flags if flag.get("title")][:limit]
+
+
+def market_code(stock_code: str) -> str:
+    code = normalize_stock_code(stock_code)
+    suffix = "SH" if code.startswith(("6", "9")) else "SZ"
+    return f"{code}.{suffix}"
+
+
+def dig(data: Any, *keys: str) -> Any:
+    current = data
+    for key in keys:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def format_datetime(value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value).strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return value
+
+
+def format_number(value: Any) -> str:
+    if value is None:
+        return "暂无"
+    if isinstance(value, (int, float)):
+        return f"{value:.2f}".rstrip("0").rstrip(".")
+    return str(value)
+
+
+def format_percent(value: Any) -> str:
+    if value is None:
+        return "暂无"
+    if isinstance(value, (int, float)):
+        return f"{value:.2f}%"
+    return str(value)
+
+
+def format_amount(value: Any) -> str:
+    if value is None:
+        return "暂无"
+    if not isinstance(value, (int, float)):
+        return str(value)
+    abs_value = abs(value)
+    if abs_value >= 100_000_000:
+        return f"{value / 100_000_000:.2f} 亿"
+    if abs_value >= 10_000:
+        return f"{value / 10_000:.2f} 万"
+    return f"{value:.2f}"

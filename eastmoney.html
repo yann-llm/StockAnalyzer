@@ -1,0 +1,1674 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>Eastmoney Workbench — 股票分析</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {
+    --bg:            oklch(98.5% 0.004 250);
+    --surface:       oklch(100% 0 0);
+    --surface-2:     oklch(96.5% 0.005 250);
+    --surface-hover: oklch(94% 0.008 250);
+    --fg:            oklch(18% 0.02 240);
+    --fg-2:          oklch(30% 0.018 240);
+    --muted:         oklch(50% 0.014 240);
+    --muted-2:       oklch(65% 0.01 240);
+    --border:        oklch(91% 0.008 240);
+    --border-strong: oklch(82% 0.012 240);
+    --accent:        oklch(54% 0.17 252);
+    --accent-soft:   oklch(96% 0.025 252);
+    --up:            oklch(58% 0.21 25);
+    --down:          oklch(54% 0.17 148);
+    --warn:          oklch(68% 0.16 70);
+    --warn-soft:     oklch(96% 0.05 75);
+
+    --font-sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Inter", "Segoe UI", system-ui, sans-serif;
+    --font-mono: "JetBrains Mono", "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+    --radius-sm: 4px;
+    --radius:    6px;
+    --radius-lg: 8px;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: var(--font-sans);
+    color: var(--fg);
+    background: var(--bg);
+    font-size: 14px;
+    line-height: 1.55;
+    font-feature-settings: "tnum", "cv11";
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ====== Topbar ====== */
+  .topbar {
+    height: 56px;
+    border-block-end: 1px solid var(--border);
+    background: var(--surface);
+    display: flex;
+    align-items: center;
+    padding-inline: 28px;
+    justify-content: space-between;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .brand-mark {
+    inline-size: 28px;
+    block-size: 28px;
+    border-radius: 6px;
+    background: linear-gradient(135deg, var(--accent), oklch(48% 0.18 220));
+    color: white;
+    display: grid;
+    place-items: center;
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: -0.02em;
+    font-family: var(--font-mono);
+  }
+  .brand-name {
+    font-weight: 600;
+    font-size: 14px;
+    letter-spacing: -0.01em;
+    line-height: 1.2;
+  }
+  .brand-name .sub {
+    display: block;
+    font-size: 11px;
+    color: var(--muted);
+    font-weight: 400;
+    margin-block-start: 2px;
+    letter-spacing: 0;
+  }
+  .top-status {
+    font-size: 12px;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-mono);
+  }
+  .top-status .dot {
+    inline-size: 6px;
+    block-size: 6px;
+    border-radius: 50%;
+    background: var(--down);
+  }
+
+  /* ====== Main layout ====== */
+  main {
+    flex: 1;
+    width: 100%;
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 64px 32px 96px;
+    position: relative;
+  }
+
+  .workbench-shell {
+    display: block;
+  }
+
+  .analysis-panel {
+    min-width: 0;
+  }
+
+  /* ====== Hero / input ====== */
+  .hero {
+    text-align: start;
+  }
+  .eyebrow {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--muted);
+    font-weight: 500;
+    font-family: var(--font-mono);
+    margin-block-end: 14px;
+  }
+  h1 {
+    font-size: 30px;
+    font-weight: 600;
+    letter-spacing: -0.018em;
+    line-height: 1.2;
+    margin: 0 0 10px;
+    color: var(--fg);
+  }
+  .lede {
+    font-size: 14.5px;
+    color: var(--muted);
+    margin: 0 0 32px;
+    max-width: 560px;
+    line-height: 1.55;
+  }
+
+  .input-row {
+    display: flex;
+    gap: 10px;
+    align-items: stretch;
+    margin-block-end: 14px;
+  }
+  .input-wrap {
+    position: relative;
+    flex: 1;
+    max-width: 480px;
+  }
+  .input-wrap input {
+    inline-size: 100%;
+    block-size: 48px;
+    padding-inline-start: 16px;
+    padding-inline-end: 92px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    background: var(--surface);
+    font-family: var(--font-mono);
+    font-size: 18px;
+    color: var(--fg);
+    letter-spacing: 0.04em;
+    outline: none;
+    transition: border-color .12s, box-shadow .12s;
+  }
+  .input-wrap input::placeholder {
+    color: var(--muted-2);
+    letter-spacing: 0.02em;
+    font-size: 14px;
+  }
+  .input-wrap input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  .input-hint {
+    position: absolute;
+    inset-inline-end: 12px;
+    inset-block-start: 50%;
+    transform: translateY(-50%);
+    font-size: 11px;
+    color: var(--muted-2);
+    font-family: var(--font-mono);
+    pointer-events: none;
+  }
+  .btn-primary {
+    height: 48px;
+    padding-inline: 22px;
+    border: 1px solid var(--accent);
+    border-radius: var(--radius);
+    background: var(--accent);
+    color: white;
+    font-family: var(--font-sans);
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    letter-spacing: 0.02em;
+    transition: filter .12s, transform .06s;
+  }
+  .btn-primary:hover { filter: brightness(1.08); }
+  .btn-primary:active { transform: translateY(1px); }
+  .btn-primary:disabled {
+    background: var(--surface-2);
+    border-color: var(--border);
+    color: var(--muted-2);
+    cursor: not-allowed;
+    filter: none;
+  }
+
+  .suggestions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    margin-block-end: 48px;
+  }
+  .suggest-label {
+    font-size: 12px;
+    color: var(--muted);
+    margin-inline-end: 4px;
+  }
+  .chip {
+    height: 28px;
+    padding-inline: 10px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: var(--surface);
+    font-size: 12px;
+    color: var(--fg-2);
+    cursor: pointer;
+    font-family: var(--font-mono);
+    letter-spacing: 0.02em;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: border-color .12s, color .12s, background .12s;
+  }
+  .chip:hover {
+    border-color: var(--border-strong);
+    background: var(--surface-hover);
+  }
+  .chip .chip-name {
+    font-family: var(--font-sans);
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  /* ====== Stepper ====== */
+  .stepper {
+    border-block-start: 1px solid var(--border);
+    padding-block: 22px 24px;
+    margin-block-end: 36px;
+  }
+  .stepper-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0;
+    margin-block-end: 14px;
+  }
+  .step {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-block: 4px;
+  }
+  .step::before {
+    content: "";
+    position: absolute;
+    inset-block-start: 6px;
+    inset-inline-start: 14px;
+    inset-inline-end: -2px;
+    block-size: 1px;
+    background: var(--border);
+  }
+  .step:last-child::before { display: none; }
+  .step .dot {
+    inline-size: 14px;
+    block-size: 14px;
+    border-radius: 50%;
+    background: var(--surface);
+    border: 1.5px solid var(--border-strong);
+    flex-shrink: 0;
+    position: relative;
+    z-index: 1;
+    transition: all .15s;
+  }
+  .step .step-name {
+    font-size: 12px;
+    color: var(--muted);
+    font-weight: 500;
+    letter-spacing: 0.01em;
+  }
+  .step .step-sub {
+    font-size: 11px;
+    color: var(--muted-2);
+    font-family: var(--font-mono);
+    min-height: 14px;
+  }
+
+  /* state: done */
+  .step.done .dot {
+    background: var(--fg);
+    border-color: var(--fg);
+  }
+  .step.done .step-name { color: var(--fg-2); }
+  .step.done::before { background: var(--fg); }
+
+  /* state: active */
+  .step.active .dot {
+    background: var(--accent);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 4px var(--accent-soft);
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  .step.active .step-name {
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .step.active .step-sub { color: var(--accent); }
+
+  /* state: error */
+  .step.error .dot {
+    background: var(--up);
+    border-color: var(--up);
+  }
+  .step.error .step-name { color: var(--up); }
+
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 4px var(--accent-soft); }
+    50%      { box-shadow: 0 0 0 7px oklch(54% 0.17 252 / 0.12); }
+  }
+
+  .stepper-meta {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    color: var(--muted);
+    font-family: var(--font-mono);
+  }
+  .stepper-meta .meta-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 20px;
+    padding-inline: 8px;
+    border-radius: 4px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    border: 1px solid oklch(54% 0.17 252 / 0.18);
+  }
+  .stepper-meta .meta-tag.warn {
+    background: var(--warn-soft);
+    color: oklch(48% 0.14 65);
+    border-color: oklch(68% 0.16 70 / 0.25);
+  }
+
+  .task-panel {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+    overflow: hidden;
+    position: fixed;
+    inset-block-start: 84px;
+    inset-inline-start: 24px;
+    width: 280px;
+    max-height: calc(100vh - 120px);
+    overflow: auto;
+    z-index: 10;
+  }
+  .task-panel-hidden {
+    display: none;
+  }
+  .task-panel-head {
+    padding: 14px 18px 12px;
+    border-block-end: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .task-panel-title {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-family: var(--font-mono);
+  }
+  .task-panel-subtitle {
+    font-size: 12px;
+    color: var(--muted);
+    font-family: var(--font-mono);
+  }
+  .task-list {
+    display: grid;
+    gap: 0;
+  }
+  .task-item {
+    display: grid;
+    gap: 8px;
+    padding: 12px 14px;
+    border-block-end: 1px solid var(--border);
+    align-items: start;
+    cursor: default;
+  }
+  .task-item:hover { background: var(--surface-2); }
+  .task-item:last-child { border-block-end: 0; }
+  .task-version {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .task-stock {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    color: var(--fg);
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .task-meta {
+    font-size: 12px;
+    color: var(--muted);
+    font-family: var(--font-mono);
+  }
+  .task-status {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    min-width: 0;
+  }
+  .task-badge {
+    display: inline-flex;
+    align-items: center;
+    height: 20px;
+    padding-inline: 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    border: 1px solid transparent;
+    flex-shrink: 0;
+  }
+  .task-badge.running,
+  .task-badge.queued {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-color: oklch(54% 0.17 252 / 0.18);
+  }
+  .task-badge.success {
+    background: oklch(96% 0.02 150);
+    color: var(--down);
+    border-color: oklch(54% 0.17 148 / 0.16);
+  }
+  .task-badge.failed {
+    background: oklch(96% 0.03 25);
+    color: var(--up);
+    border-color: oklch(58% 0.21 25 / 0.18);
+  }
+  .task-note {
+    font-size: 12px;
+    color: var(--fg-2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .task-sublist {
+    display: grid;
+    gap: 6px;
+    margin-block-start: 2px;
+  }
+  .task-subitem {
+    display: grid;
+    gap: 3px;
+    padding: 7px 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+  }
+  .task-subitem.running {
+    border-color: oklch(54% 0.17 252 / 0.3);
+    background: var(--accent-soft);
+  }
+  .task-subitem.failed {
+    border-color: oklch(68% 0.16 70 / 0.28);
+    background: var(--warn-soft);
+  }
+  .task-subhead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 11px;
+    font-family: var(--font-mono);
+  }
+  .task-submodule {
+    color: var(--fg-2);
+    font-weight: 600;
+  }
+  .task-substage {
+    color: var(--muted);
+  }
+  .task-submsg {
+    color: var(--muted);
+    font-size: 11.5px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* ====== Result ====== */
+  .result {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: 0 1px 2px oklch(20% 0.02 240 / 0.025);
+    overflow: hidden;
+    transition: opacity .2s;
+  }
+  .result.hidden { display: none; }
+  .result.loading {
+    opacity: 0.55;
+    pointer-events: none;
+  }
+  .result-head {
+    padding: 22px 28px 18px;
+    border-block-end: 1px solid var(--border);
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .result-title h2 {
+    margin: 0 0 6px;
+    font-size: 20px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+  .result-title h2 .code {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    color: var(--muted);
+    font-weight: 500;
+    letter-spacing: 0.04em;
+  }
+  .result-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    color: var(--muted);
+    font-family: var(--font-mono);
+  }
+  .result-meta .sep {
+    color: var(--border-strong);
+  }
+  .result-meta .data-source {
+    color: var(--fg-2);
+  }
+  .result-meta .cache-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 20px;
+    padding-inline: 8px;
+    border-radius: 4px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    border: 1px solid oklch(54% 0.17 252 / 0.18);
+  }
+  .module-statuses {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-block-start: 10px;
+  }
+  .module-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 22px;
+    padding-inline: 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-family: var(--font-mono);
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--muted);
+  }
+  .module-pill.success {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-color: oklch(54% 0.17 252 / 0.18);
+  }
+  .module-pill.failed,
+  .module-pill.missing,
+  .module-pill.missing_file {
+    background: var(--warn-soft);
+    color: oklch(48% 0.14 65);
+    border-color: oklch(68% 0.16 70 / 0.25);
+  }
+  .result-actions {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .btn-ghost {
+    height: 30px;
+    padding-inline: 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    color: var(--fg-2);
+    font-size: 12px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .btn-ghost:hover {
+    border-color: var(--border-strong);
+    background: var(--surface-hover);
+  }
+  .btn-ghost svg { inline-size: 13px; block-size: 13px; }
+
+  .result-body {
+    padding: 24px 28px 32px;
+  }
+  .result-section + .result-section {
+    margin-block-start: 28px;
+  }
+  .result-section h3 {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--muted);
+    margin: 0 0 10px;
+    font-family: var(--font-mono);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .result-section h3::before {
+    content: "";
+    inline-size: 3px;
+    block-size: 12px;
+    background: var(--accent);
+    border-radius: 1px;
+    display: inline-block;
+  }
+  .result-section h3 .zh {
+    color: var(--fg);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    letter-spacing: 0.01em;
+    text-transform: none;
+    font-weight: 600;
+  }
+  .result-section p {
+    margin: 0 0 8px;
+    color: var(--fg-2);
+    font-size: 14px;
+    line-height: 1.7;
+    max-width: 70ch;
+  }
+  .result-section .field {
+    display: grid;
+    grid-template-columns: 72px minmax(0, 1fr);
+    gap: 8px;
+    margin-block-end: 8px;
+    align-items: start;
+  }
+  .result-section .field:last-child { margin-block-end: 0; }
+  .result-section .field-label {
+    color: var(--muted);
+    font-size: 12px;
+    font-family: var(--font-mono);
+    font-weight: 600;
+  }
+  .result-section .field-value {
+    color: var(--fg-2);
+    font-size: 14px;
+    line-height: 1.7;
+    min-width: 0;
+    white-space: pre-wrap;
+  }
+  .result-section p:last-child { margin-block-end: 0; }
+  .result-section .em-up { color: var(--up); font-weight: 500; }
+  .result-section .em-down { color: var(--down); font-weight: 500; }
+  .result-section .em-mute { color: var(--muted); font-family: var(--font-mono); font-size: 12.5px; padding: 0 2px; }
+
+  /* ====== Empty / error state ====== */
+  .empty {
+    text-align: center;
+    color: var(--muted);
+    font-size: 13px;
+    padding: 80px 24px;
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-lg);
+  }
+  .empty .empty-title {
+    font-size: 14px;
+    color: var(--fg-2);
+    margin-block-end: 6px;
+    font-weight: 500;
+  }
+
+  /* ====== Footer ====== */
+  footer {
+    border-block-start: 1px solid var(--border);
+    background: var(--surface);
+    padding: 12px 28px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 11.5px;
+    color: var(--muted);
+    font-family: var(--font-mono);
+  }
+  footer .left, footer .right {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+  }
+  footer .kv { display: inline-flex; gap: 4px; align-items: center; }
+  footer .kv .k { color: var(--muted-2); }
+  footer .kv .v { color: var(--fg-2); }
+
+  @media (max-width: 860px) {
+    main {
+      padding: 40px 18px 84px;
+    }
+    .workbench-shell {
+      display: grid;
+      gap: 24px;
+    }
+    .task-panel {
+      position: static;
+      inset: auto;
+      width: auto;
+      max-height: none;
+    }
+    .task-list {
+      max-height: 240px;
+      overflow: auto;
+    }
+  }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark">EW</div>
+    <div class="brand-name">
+      Eastmoney Workbench
+      <span class="sub">本地数据分析 · 轻量入口</span>
+    </div>
+  </div>
+  <div class="top-status" id="top-status">
+    <span class="dot"></span>本地服务 · API 已连接
+  </div>
+</header>
+
+<main>
+  <section class="hero">
+    <div class="eyebrow">STOCK ANALYSIS · 股票分析</div>
+    <h1>输入股票代码，开始分析</h1>
+    <p class="lede">系统会先检查本地抓取与清洗数据，再调用大模型生成结构化结论。若已有缓存则直接返回，避免重复抓取与模型消耗。</p>
+
+    <form class="input-row" id="form">
+      <div class="input-wrap">
+        <input
+          id="code-input"
+          type="text"
+          inputmode="numeric"
+          maxlength="6"
+          placeholder="000157、002850、300919、688256 …"
+          autocomplete="off"
+          autofocus
+        />
+        <span class="input-hint">6 位 A 股代码</span>
+      </div>
+      <button class="btn-primary" type="submit" id="submit-btn">开始分析</button>
+    </form>
+
+    <div class="suggestions" id="suggestions">
+      <span class="suggest-label">已缓存：</span>
+      <button class="chip" data-code="000157" type="button">000157<span class="chip-name">中联重科</span></button>
+      <button class="chip" data-code="002850" type="button">002850<span class="chip-name">科达利</span></button>
+      <button class="chip" data-code="300919" type="button">300919<span class="chip-name">中伟股份</span></button>
+      <button class="chip" data-code="688256" type="button">688256<span class="chip-name">寒武纪</span></button>
+    </div>
+  </section>
+
+  <div class="workbench-shell">
+    <aside class="task-panel task-panel-hidden" id="task-panel" aria-label="分析任务版本" aria-hidden="true">
+      <div class="task-panel-head">
+        <div class="task-panel-title">Task Versions</div>
+        <div class="task-panel-subtitle" id="task-panel-subtitle">加载最近任务 ...</div>
+      </div>
+      <div class="task-list" id="task-list"></div>
+    </aside>
+
+    <div class="analysis-panel">
+      <section class="stepper" id="stepper">
+        <div class="stepper-row">
+          <div class="step done" data-step="1">
+            <div class="dot"></div>
+            <div class="step-name">等待输入</div>
+            <div class="step-sub" id="sub-1">已接收 000157</div>
+          </div>
+          <div class="step done" data-step="2">
+            <div class="dot"></div>
+            <div class="step-name">检查本地抓取数据</div>
+            <div class="step-sub" id="sub-2">5/5 模块就绪</div>
+          </div>
+          <div class="step done" data-step="3">
+            <div class="dot"></div>
+            <div class="step-name">调用大模型分析</div>
+            <div class="step-sub" id="sub-3">跳过 · 命中缓存</div>
+          </div>
+          <div class="step done" data-step="4">
+            <div class="dot"></div>
+            <div class="step-name">分析完成</div>
+            <div class="step-sub" id="sub-4">已返回结果</div>
+          </div>
+        </div>
+        <div class="stepper-meta" id="stepper-meta">
+          <span class="meta-tag" id="meta-tag">缓存命中</span>
+          <span id="meta-text">已命中缓存 · 跳过数据抓取与模型调用 · 耗时 142ms</span>
+        </div>
+      </section>
+
+      <section class="result" id="result">
+        <header class="result-head">
+          <div class="result-title">
+            <h2 id="r-name">中联重科 <span class="code" id="r-code">000157.SZ</span></h2>
+            <div class="result-meta">
+              <span>分析时间 <span id="r-time">2026-05-20 08:52</span></span>
+              <span class="sep">·</span>
+              <span>数据源 <span class="data-source" id="r-source">本地缓存 · cleaned/</span></span>
+              <span class="sep">·</span>
+              <span>模型 <span id="r-model">已生成</span></span>
+              <span class="cache-tag" id="r-cache-tag">缓存命中</span>
+            </div>
+            <div class="module-statuses" id="module-statuses"></div>
+          </div>
+          <div class="result-actions">
+            <button class="btn-ghost" id="btn-rerun">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 7a6 6 0 0 1 11-3.3M14 9a6 6 0 0 1-11 3.3M13 1v3h-3M3 15v-3h3"/></svg>
+              重新分析
+            </button>
+            <button class="btn-ghost" id="btn-copy">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="9" height="11" rx="1"/><path d="M5 1h8a1 1 0 0 1 1 1v9"/></svg>
+              复制
+            </button>
+          </div>
+        </header>
+        <article class="result-body" id="r-body">
+          <!-- sections injected by JS -->
+        </article>
+      </section>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <div class="left">
+    <span class="kv"><span class="k">data/</span><span class="v">data/&lt;stock_code&gt;/cleaned/</span></span>
+    <span class="kv"><span class="k">缓存股票</span><span class="v" id="footer-cache-count">--</span></span>
+    <span class="kv"><span class="k">最近命中</span><span class="v" id="footer-last-code">--</span></span>
+  </div>
+  <div class="right">
+    <span class="kv"><span class="k">build</span><span class="v">local dev</span></span>
+  </div>
+</footer>
+
+<script type="application/json" id="legacy-demo-script">
+(function() {
+  // ====== Analysis data (4 cached + generic fallback) ======
+  const STOCKS = {
+    "000157": {
+      name: "中联重科",
+      code: "000157.SZ",
+      industry: "工程机械 · BK0739",
+      time: "2026-05-20 08:52",
+      sections: [
+        { en: "CONCLUSION", zh: "核心结论", body: [
+          '<p>工程机械周期底部回升信号显现：海外营收占比的提升对冲了国内地产链需求疲弱，但盈利修复速度仍落后于行业第一梯队。属于<span class="em-up">"复苏可见但弹性有限"</span>类型，左侧逐步配置的胜率高于右侧追涨。</p>'
+        ]},
+        { en: "FINANCIAL", zh: "财务摘要", body: [
+          '<p>近两个季度营业收入同比由负转正，毛利率维持在 22%-24% 区间窄幅波动；归母净利润弹性显著大于收入端，反映规模化后的费用率改善。</p>',
+          '<p>经营现金流改善但尚未充分覆盖资本开支与分红，资产负债率仍高于行业中位，应收账款周转较去年同期略有放缓。<span class="em-mute">财务模块状态 · 成功</span></p>'
+        ]},
+        { en: "INDUSTRY", zh: "行业判断", body: [
+          '<p>工程机械（BK0739）景气度处于复苏初期：主要支撑来自一带一路、矿山、能源建设三个方向，地产链需求仍是拖累项。北美、东南亚、中东渗透率提升是核心变量。</p>',
+          '<p>近 5 日主力资金<span class="em-up">净流入</span>，但 10 日整体仍偏弱，板块情绪尚未明确反转。<span class="em-mute">行业模块状态 · 成功</span></p>'
+        ]},
+        { en: "VALUATION", zh: "估值判断", body: [
+          '<p>当前 PE 处于过去 5 年分位约 35%-45%，PB 略低于行业中位。相对估值并不便宜，但若盈利持续修复，分母端可在两个季度内消化当前估值压力。</p>',
+          '<p>建议关注 PB 而非 PE 作为锚位，原因是周期型企业的 EPS 在底部年份波动剧烈。<span class="em-mute">估值模块状态 · 成功</span></p>'
+        ]},
+        { en: "RISK", zh: "风险提示", body: [
+          '<p>地产链回暖不及预期、海外汇率与关税扰动、应收账款减值压力、国资改革推进节奏不确定。<span class="em-mute">公告风险模块状态 · 成功 · 近 30 日无重大事项</span></p>'
+        ]},
+        { en: "ACTION", zh: "操作建议", body: [
+          '<p>建议跟踪海外订单与经营性现金流的季度数据，作为右侧信号；短期事件驱动空间有限，更适合中线左侧逐步配置而非右侧追涨。</p>',
+          '<p>仓位建议中性偏低，止损可设在 PB 跌破近 3 年低位。</p>'
+        ]}
+      ]
+    },
+    "002850": {
+      name: "科达利",
+      code: "002850.SZ",
+      industry: "锂电池结构件 · BK0966",
+      time: "2026-05-19 21:34",
+      sections: [
+        { en: "CONCLUSION", zh: "核心结论", body: [
+          '<p>动力电池结构件全球龙头，绑定头部电池厂订单稳健；但下游电池价格战压力沿供应链传导，单价持续承压。储能与海外产能扩张是新增长支点，属于<span class="em-up">"估值合理 + 龙头确定性"</span>的中长期配置标的。</p>'
+        ]},
+        { en: "FINANCIAL", zh: "财务摘要", body: [
+          '<p>收入增速边际放缓但仍维持双位数，毛利率从前两年高点回落 2-3 个百分点，反映价格谈判压力；归母净利率仍维持在 10%-12% 区间，ROE 稳居行业前列。</p>',
+          '<p>在建工程与资本开支偏高，海外产能建设阶段特征明显，需密切关注转固后的折旧压力。<span class="em-mute">财务模块状态 · 成功</span></p>'
+        ]},
+        { en: "INDUSTRY", zh: "行业判断", body: [
+          '<p>锂电产业链整体处于价格底部、产能消化期；结构件环节由于技术壁垒与认证周期，竞争格局相对稳定，前两名集中度持续提升。</p>',
+          '<p>储能渗透与欧洲本地化是结构性增量；动力侧短期承压，难有趋势性放量。<span class="em-mute">行业模块状态 · 成功</span></p>'
+        ]},
+        { en: "VALUATION", zh: "估值判断", body: [
+          '<p>PE 已显著回落至 20x-25x 区间，处于历史分位约 20%-30%，PB 同步回归；相对锂电中游环节属于估值合理偏低。</p>',
+          '<p>仍需观察价格战出清节奏，估值进一步下行风险有限但反转催化仍待确认。<span class="em-mute">估值模块状态 · 成功</span></p>'
+        ]},
+        { en: "RISK", zh: "风险提示", body: [
+          '<p>客户集中度高、单一大客户份额波动、海外建厂资本开支与回报周期、储能放量不及预期、铜铝价格大幅波动对成本端的扰动。<span class="em-mute">公告风险模块状态 · 成功</span></p>'
+        ]},
+        { en: "ACTION", zh: "操作建议", body: [
+          '<p>建议关注海外产能爬坡进度与单季度毛利率拐点信号。短期受锂电板块情绪联动较强，回调更具吸引力。</p>',
+          '<p>分批建仓策略优于一次性配置，仓位建议中性。</p>'
+        ]}
+      ]
+    },
+    "300919": {
+      name: "中伟股份",
+      code: "300919.SZ",
+      industry: "三元前驱体 · BK0966",
+      time: "2026-05-20 06:11",
+      sections: [
+        { en: "CONCLUSION", zh: "核心结论", body: [
+          '<p>前驱体环节绝对龙头，规模与海外资源布局领先；但下游正极厂自产前驱体趋势加剧，叠加镍价大幅波动，盈利稳定性受冲击。转型一体化与磷酸铁锂横向拓展是关键看点。属于<span class="em-down">"低估值 + 高弹性 + 高不确定"</span>的配置类型。</p>'
+        ]},
+        { en: "FINANCIAL", zh: "财务摘要", body: [
+          '<p>收入增速回落明显，部分季度同比下滑；毛利率在镍价与价格联动机制下波动较大，归母净利润弹性显著放大。</p>',
+          '<p>经营现金流随原料采购节奏摆动，应收账款周转天数有所拉长，但账面流动性尚可。<span class="em-mute">财务模块状态 · 成功</span></p>'
+        ]},
+        { en: "INDUSTRY", zh: "行业判断", body: [
+          '<p>三元前驱体全球需求仍由欧美高镍方向支撑，但国内三元装机被磷酸铁锂持续挤压；产业链一体化（矿端 → 前驱体 → 正极 → 电池）是大趋势，对单环节企业不利。</p>',
+          '<p>印尼镍资源布局是中伟最核心的壁垒之一，决定中期成本结构。<span class="em-mute">行业模块状态 · 成功</span></p>'
+        ]},
+        { en: "VALUATION", zh: "估值判断", body: [
+          '<p>PE 在盈利波动下参考意义降低，PB 处于历史分位 15%-25% 的低位区间，市场已较充分定价短期不确定性。</p>',
+          '<p>若印尼项目顺利出货且镍价企稳，估值修复空间存在；判断分位低 ≠ 见底，需结合产能进度。<span class="em-mute">估值模块状态 · 成功</span></p>'
+        ]},
+        { en: "RISK", zh: "风险提示", body: [
+          '<p>镍价剧烈波动、下游客户自产替代、海外项目进度与地缘风险、磷酸铁锂对三元路线的持续替代。<span class="em-mute">公告风险模块状态 · 关注 · 近期有海外子公司变更披露</span></p>'
+        ]},
+        { en: "ACTION", zh: "操作建议", body: [
+          '<p>仓位需严格控制；右侧信号建议跟踪印尼出货数据与三元正极装机环比拐点，而非单纯估值分位。</p>',
+          '<p>不适合作为底仓，更适合作为高赔率卫星仓配置。</p>'
+        ]}
+      ]
+    },
+    "688256": {
+      name: "寒武纪",
+      code: "688256.SH",
+      industry: "AI 芯片 · BK1036",
+      time: "2026-05-19 23:08",
+      sections: [
+        { en: "CONCLUSION", zh: "核心结论", body: [
+          '<p>稀缺国产 AI 芯片标的，国产替代叙事承载明显；订单与收入端尚未兑现到稳态盈利，估值高度依赖订单催化与产品迭代节奏，业绩波动剧烈。属于<span class="em-up">"主题 + 题材 + 高波动"</span>的交易型标的。</p>'
+        ]},
+        { en: "FINANCIAL", zh: "财务摘要", body: [
+          '<p>营业收入季度间波动巨大，主要由政府、科研客户大单确认节奏决定；毛利率维持高位但费用率（研发 + 销售）显著高于收入，归母净利润持续为负。</p>',
+          '<p>现金流主要靠融资与政府补助，账面现金充裕但消耗速度需关注。<span class="em-mute">财务模块状态 · 成功</span></p>'
+        ]},
+        { en: "INDUSTRY", zh: "行业判断", body: [
+          '<p>AI 算力国内需求处于持续上行通道，互联网厂商自研芯片与海外供给受限共同打开国产芯片窗口期。</p>',
+          '<p>量产 + 工艺先进性 + 软件生态三方面壁垒仍高，量产兑现仍是核心障碍。<span class="em-mute">行业模块状态 · 成功</span></p>'
+        ]},
+        { en: "VALUATION", zh: "估值判断", body: [
+          '<p>常规 PE/PB 框架失效，市场主要使用 PS 与远期想象空间定价；当前 PS 处于历史分位 60%-75%，相比同梯队海外可比已不便宜。</p>',
+          '<p>对边际催化敏感度极高，估值定价更接近事件驱动而非基本面锚定。<span class="em-mute">估值模块状态 · 成功</span></p>'
+        ]},
+        { en: "RISK", zh: "风险提示", body: [
+          '<p>订单确认节奏不可控、制程供给与代工受限、研发投入与现金消耗不可持续、市场情绪波动放大估值回撤幅度。<span class="em-mute">公告风险模块状态 · 关注</span></p>'
+        ]},
+        { en: "ACTION", zh: "操作建议", body: [
+          '<p>不适合作为底仓配置；如参与建议严格控制仓位，并在大订单或新品节点附近交易，而非估值锚位。</p>',
+          '<p>设置严格止损与止盈纪律，避免单笔仓位超过组合 3%。</p>'
+        ]}
+      ]
+    }
+  };
+
+  // Demo branches for non-cached but valid codes
+  const KNOWN_NAMES = {
+    "600519": "贵州茅台",
+    "300750": "宁德时代",
+    "002594": "比亚迪",
+    "601318": "中国平安",
+    "000001": "平安银行"
+  };
+
+  // ====== DOM refs ======
+  const form = document.getElementById("form");
+  const input = document.getElementById("code-input");
+  const submitBtn = document.getElementById("submit-btn");
+  const stepper = document.getElementById("stepper");
+  const steps = Array.from(stepper.querySelectorAll(".step"));
+  const subs = [
+    document.getElementById("sub-1"),
+    document.getElementById("sub-2"),
+    document.getElementById("sub-3"),
+    document.getElementById("sub-4")
+  ];
+  const metaTag = document.getElementById("meta-tag");
+  const metaText = document.getElementById("meta-text");
+  const result = document.getElementById("result");
+  const rName = document.getElementById("r-name");
+  const rCode = document.getElementById("r-code");
+  const rTime = document.getElementById("r-time");
+  const rSource = document.getElementById("r-source");
+  const rModel = document.getElementById("r-model");
+  const rCacheTag = document.getElementById("r-cache-tag");
+  const rBody = document.getElementById("r-body");
+  const chips = document.querySelectorAll(".chip");
+  const btnRerun = document.getElementById("btn-rerun");
+  const btnCopy = document.getElementById("btn-copy");
+
+  // ====== Stepper control ======
+  function resetSteps() {
+    steps.forEach(s => s.classList.remove("done", "active", "error"));
+    subs.forEach(s => s.textContent = "");
+  }
+  function setStep(idx, state) {
+    // idx 1..4; state = 'done' | 'active' | 'error'
+    const el = steps[idx - 1];
+    el.classList.remove("done", "active", "error");
+    if (state) el.classList.add(state);
+  }
+  function setMeta(tagText, msg, variant) {
+    metaTag.textContent = tagText;
+    metaText.textContent = msg;
+    metaTag.classList.remove("warn");
+    if (variant === "warn") metaTag.classList.add("warn");
+    if (!tagText) metaTag.style.display = "none";
+    else metaTag.style.display = "";
+  }
+
+  // ====== Render result ======
+  function renderResult(s, opts) {
+    rName.firstChild.nodeValue = s.name + " ";
+    rCode.textContent = s.code;
+    rTime.textContent = s.time;
+    rSource.textContent = opts.source;
+    rModel.textContent = opts.model;
+    rCacheTag.textContent = opts.cacheTag;
+    rCacheTag.style.display = opts.cacheTag ? "" : "none";
+
+    rBody.innerHTML = s.sections.map(sec => `
+      <section class="result-section">
+        <h3>${sec.en} <span class="zh">${sec.zh}</span></h3>
+        ${sec.body.join("")}
+      </section>
+    `).join("");
+    result.classList.remove("hidden", "loading");
+  }
+
+  function dimResult() {
+    result.classList.add("loading");
+  }
+
+  // ====== Generic analysis text for non-cached codes ======
+  function genericAnalysis(code, name) {
+    return {
+      name: name || code,
+      code: code,
+      industry: "未识别行业",
+      time: nowStr(),
+      sections: [
+        { en: "CONCLUSION", zh: "核心结论", body: [
+          `<p>${name || code} 为本次新抓取标的，所属行业归类仍在确认中。基于刚完成的财务、行业、估值、公告与舆情五模块清洗结果，整体属于初步覆盖阶段，建议在更多季度数据落地后再做趋势判断。</p>`
+        ]},
+        { en: "FINANCIAL", zh: "财务摘要", body: [
+          '<p>收入与利润数据已抓取完毕，单一季度同比、环比变化方向已识别；具体量级数字需结合可比公司一并阅读，避免被单点波动误导。<span class="em-mute">financial 模块 · 成功</span></p>'
+        ]},
+        { en: "INDUSTRY", zh: "行业判断", body: [
+          '<p>行业资金流与板块景气度模块已就绪；该标的所在子行业近 5 日主力资金净流入方向已记录，但 10 日方向需结合更长窗口判断。<span class="em-mute">industry 模块 · 成功</span></p>'
+        ]},
+        { en: "VALUATION", zh: "估值判断", body: [
+          '<p>PE、PB、PS 三项估值分位已计算；当前估值相对自身历史与行业基准的位置已落入估值模块输出，请结合行业判断综合阅读。<span class="em-mute">valuation 模块 · 成功</span></p>'
+        ]},
+        { en: "RISK", zh: "风险提示", body: [
+          '<p>近 30 日公告事项与舆情扫描已完成，无重大异常事件触发；后续如有重大资产重组、立案调查、商誉减值等公告，会在下一次刷新中自动标红。<span class="em-mute">notice_risk · stockcomment 模块 · 成功</span></p>'
+        ]},
+        { en: "ACTION", zh: "操作建议", body: [
+          '<p>当前为初次覆盖，未形成中线观点；建议至少跟踪 1-2 个完整季度数据后再形成持仓判断。短期参与需自行评估题材弹性。</p>'
+        ]}
+      ]
+    };
+  }
+
+  function nowStr() {
+    const d = new Date();
+    const pad = n => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  // ====== Flow orchestration ======
+  let currentRun = 0;
+  function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+  async function runAnalysis(code) {
+    const runId = ++currentRun;
+    code = code.trim();
+
+    // Validation
+    if (!/^\d{6}$/.test(code)) {
+      resetSteps();
+      setStep(1, "error");
+      subs[0].textContent = "代码格式无效";
+      setMeta("无效输入", "请输入 6 位 A 股代码，例如 000157、688256", "warn");
+      result.classList.add("hidden");
+      return;
+    }
+
+    submitBtn.disabled = true;
+    dimResult();
+
+    const cached = STOCKS[code];
+    const isFreshCache = !!cached;
+
+    // === Branch A: cache hit ===
+    if (isFreshCache) {
+      resetSteps();
+      setStep(1, "done");
+      subs[0].textContent = `已接收 ${code}`;
+      setStep(2, "active");
+      subs[1].textContent = "扫描 cache_manifest.json …";
+      setMeta("", "正在检查本地抓取数据 …");
+
+      await delay(280);
+      if (runId !== currentRun) return;
+
+      setStep(2, "done");
+      subs[1].textContent = "5/5 模块就绪";
+      setStep(3, "done");
+      subs[2].textContent = "跳过 · 命中缓存";
+      setStep(4, "done");
+      subs[3].textContent = "已返回结果";
+      setMeta("缓存命中", `已命中缓存 · 跳过数据抓取与模型调用 · 耗时 ${130 + Math.floor(Math.random()*40)}ms`);
+
+      renderResult(cached, {
+        source: "本地缓存 · cleaned/",
+        model: "已生成",
+        cacheTag: "缓存命中"
+      });
+      submitBtn.disabled = false;
+      return;
+    }
+
+    // === Branch B: not cached → fetch + clean + model ===
+    resetSteps();
+    setStep(1, "done");
+    subs[0].textContent = `已接收 ${code}`;
+    setStep(2, "active");
+    subs[1].textContent = "扫描 cache_manifest.json …";
+    setMeta("", "正在检查本地抓取数据 …");
+
+    await delay(420);
+    if (runId !== currentRun) return;
+
+    // No cache → fetch
+    subs[1].textContent = "未找到缓存 · 正在抓取并清洗 5 个模块";
+    setMeta("新抓取", "正在抓取并清洗数据 · financial / industry / valuation / notice_risk / stockcomment");
+
+    await delay(1100);
+    if (runId !== currentRun) return;
+
+    setStep(2, "done");
+    subs[1].textContent = "5/5 模块清洗完成";
+    setStep(3, "active");
+    subs[2].textContent = "调用 LLM · 生成结构化结论 …";
+    rModel.textContent = "生成中 …";
+
+    await delay(1500);
+    if (runId !== currentRun) return;
+
+    setStep(3, "done");
+    subs[2].textContent = "已生成 · 6 个文本区块";
+    setStep(4, "done");
+    subs[3].textContent = "已返回结果";
+
+    const totalMs = 3000 + Math.floor(Math.random()*400);
+    setMeta("新抓取", `数据抓取 + 模型分析完成 · 共 ${totalMs}ms`);
+
+    const name = KNOWN_NAMES[code];
+    renderResult(genericAnalysis(code, name), {
+      source: `本地新抓取 · data/${code}/cleaned/`,
+      model: "已生成 · gpt-class · 6 区块",
+      cacheTag: ""
+    });
+    submitBtn.disabled = false;
+  }
+
+  // ====== Wire up ======
+  form.addEventListener("submit", e => {
+    e.preventDefault();
+    runAnalysis(input.value);
+  });
+  input.addEventListener("input", () => {
+    // restrict to digits
+    input.value = input.value.replace(/\D/g, "").slice(0, 6);
+  });
+  chips.forEach(c => {
+    c.addEventListener("click", () => {
+      const code = c.dataset.code;
+      input.value = code;
+      runAnalysis(code);
+    });
+  });
+  btnRerun.addEventListener("click", () => {
+    analyzeAndPoll(input.value || currentCode || rCode.textContent.slice(0, 6));
+  });
+  btnCopy.addEventListener("click", () => {
+    const text = Array.from(rBody.querySelectorAll(".result-section")).map(s => {
+      const h = s.querySelector("h3 .zh").textContent;
+      const body = Array.from(s.querySelectorAll("p")).map(p => p.textContent).join("\n");
+      return `## ${h}\n${body}`;
+    }).join("\n\n");
+    const header = `${rName.textContent.trim()} ${rCode.textContent}\n分析时间 ${rTime.textContent}\n\n`;
+    navigator.clipboard?.writeText(header + text);
+    btnCopy.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="m3 8 3 3 7-7"/></svg>已复制';
+    setTimeout(() => {
+      btnCopy.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="9" height="11" rx="1"/><path d="M5 1h8a1 1 0 0 1 1 1v9"/></svg>复制';
+    }, 1400);
+  });
+
+  // Initial state: 000157 cached result already rendered in HTML; populate body via JS to stay in sync
+  renderResult(STOCKS["000157"], {
+    source: "本地缓存 · cleaned/",
+    model: "已生成",
+    cacheTag: "缓存命中"
+  });
+})();
+</script>
+
+<script>
+(() => {
+  const form = document.getElementById("form");
+  const input = document.getElementById("code-input");
+  const submitBtn = document.getElementById("submit-btn");
+  const stepper = document.getElementById("stepper");
+  const steps = Array.from(stepper.querySelectorAll(".step"));
+  const subs = [
+    document.getElementById("sub-1"),
+    document.getElementById("sub-2"),
+    document.getElementById("sub-3"),
+    document.getElementById("sub-4")
+  ];
+  const metaTag = document.getElementById("meta-tag");
+  const metaText = document.getElementById("meta-text");
+  const result = document.getElementById("result");
+  const rName = document.getElementById("r-name");
+  const rCode = document.getElementById("r-code");
+  const rTime = document.getElementById("r-time");
+  const rSource = document.getElementById("r-source");
+  const rModel = document.getElementById("r-model");
+  const rCacheTag = document.getElementById("r-cache-tag");
+  const rBody = document.getElementById("r-body");
+  const moduleStatuses = document.getElementById("module-statuses");
+  const taskPanel = document.getElementById("task-panel");
+  const taskList = document.getElementById("task-list");
+  const taskPanelSubtitle = document.getElementById("task-panel-subtitle");
+  const suggestions = document.getElementById("suggestions");
+  const btnRerun = document.getElementById("btn-rerun");
+  const btnCopy = document.getElementById("btn-copy");
+  const topStatus = document.getElementById("top-status");
+  const footerCacheCount = document.getElementById("footer-cache-count");
+  const footerLastCode = document.getElementById("footer-last-code");
+
+  let currentRun = 0;
+  let currentCode = "000157";
+
+  function resetSteps() {
+    steps.forEach(step => step.classList.remove("done", "active", "error"));
+    subs.forEach(sub => sub.textContent = "");
+  }
+
+  function setStep(idx, state, text) {
+    const el = steps[idx - 1];
+    el.classList.remove("done", "active", "error");
+    if (state) el.classList.add(state);
+    if (text !== undefined) subs[idx - 1].textContent = text;
+  }
+
+  function setMeta(tagText, msg, variant) {
+    metaTag.textContent = tagText || "";
+    metaText.textContent = msg || "";
+    metaTag.classList.remove("warn");
+    if (variant === "warn") metaTag.classList.add("warn");
+    metaTag.style.display = tagText ? "" : "none";
+  }
+
+  function setBusy(isBusy) {
+    submitBtn.disabled = isBusy;
+    submitBtn.textContent = isBusy ? "分析中..." : "开始分析";
+    result.classList.toggle("loading", isBusy);
+  }
+
+  function showTaskPanel() {
+    taskPanel.classList.remove("task-panel-hidden");
+    taskPanel.setAttribute("aria-hidden", "false");
+  }
+
+  function hideTaskPanel() {
+    taskPanel.classList.add("task-panel-hidden");
+    taskPanel.setAttribute("aria-hidden", "true");
+  }
+
+  function escapeHTML(value) {
+    return String(value ?? "").replace(/[&<>"']/g, ch => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;"
+    }[ch]));
+  }
+
+  async function api(path, options) {
+    const response = await fetch(path, {
+      headers: { "Accept": "application/json" },
+      ...options
+    });
+    if (!response.ok) {
+      let detail = `${response.status} ${response.statusText}`;
+      try {
+        const body = await response.json();
+        detail = body.detail || detail;
+      } catch {
+        // Keep the HTTP status text when the body is not JSON.
+      }
+      const error = new Error(detail);
+      error.status = response.status;
+      throw error;
+    }
+    return response.json();
+  }
+
+  function renderResult(summary, opts = {}) {
+    currentCode = summary.stock_code;
+    rName.firstChild.nodeValue = `${summary.stock_name || summary.stock_code} `;
+    rCode.textContent = summary.market_code || summary.stock_code;
+    rTime.textContent = summary.generated_at || "--";
+    rSource.textContent = summary.data_source || `data/${summary.stock_code}/cleaned/`;
+    rModel.textContent = opts.model || "本地摘要";
+    rCacheTag.textContent = opts.cacheTag || (summary.cache_hit ? "缓存命中" : "");
+    rCacheTag.style.display = rCacheTag.textContent ? "" : "none";
+
+    rBody.innerHTML = (summary.sections || []).map(section => {
+      const items = Array.isArray(section.items) ? section.items : [];
+      const content = items.length
+        ? items.map(item => `
+            <div class="field">
+              <div class="field-label">${escapeHTML(item.label || "")}</div>
+              <div class="field-value">${escapeHTML(item.value || "")}</div>
+            </div>
+          `).join("")
+        : `<p>${escapeHTML(section.body)}</p>`;
+      return `
+        <section class="result-section">
+          <h3>${escapeHTML(section.key || "SECTION").toUpperCase()} <span class="zh">${escapeHTML(section.title)}</span></h3>
+          ${content}
+        </section>
+      `;
+    }).join("");
+    moduleStatuses.innerHTML = Object.entries(summary.modules || {}).map(([name, info]) => `
+      <span class="module-pill ${escapeHTML(info.status || "missing")}">${escapeHTML(name)} · ${escapeHTML(info.status || "missing")}</span>
+    `).join("");
+    result.classList.remove("hidden", "loading");
+    footerLastCode.textContent = summary.stock_code;
+  }
+
+  function renderTasks(items) {
+    if (!items.length) {
+      taskPanelSubtitle.textContent = "暂无任务";
+      taskList.innerHTML = '<div class="task-item"><div class="task-version">No version</div><div class="task-stock">--</div><div class="task-note">还没有运行过分析任务。</div></div>';
+      return;
+    }
+    taskPanelSubtitle.textContent = `${items.length} 个版本`;
+    taskList.innerHTML = items.map((job, index) => renderTaskItem(job, items.length - index)).join("");
+  }
+
+  function renderTaskItem(job, version) {
+    const moduleTasks = Array.isArray(job.module_tasks) ? job.module_tasks : [];
+    const sublist = moduleTasks.length ? `
+      <div class="task-sublist">
+        ${moduleTasks.map(task => `
+          <div class="task-subitem ${escapeHTML(task.status || "queued")}">
+            <div class="task-subhead">
+              <span class="task-submodule">${escapeHTML(moduleNameZh(task.module))}</span>
+              <span class="task-substage">${escapeHTML(task.stage_name || task.stage || "等待")}</span>
+            </div>
+            <div class="task-submsg">${escapeHTML(task.message || statusText(task.status))}</div>
+          </div>
+        `).join("")}
+      </div>
+    ` : "";
+    return `
+      <div class="task-item">
+        <div class="task-version">V${String(version).padStart(2, "0")} · ${escapeHTML((job.job_id || "").slice(0, 8))}</div>
+        <div class="task-stock"><span>${escapeHTML(job.stock_code)}</span><span>${escapeHTML(job.force_refresh ? "刷新" : "缓存")}</span></div>
+        <div class="task-meta">${escapeHTML(job.finished_at || job.started_at || job.created_at || "--")}</div>
+        <div class="task-status">
+          <span class="task-badge ${escapeHTML(job.status || "queued")}">${escapeHTML(job.status || "queued")}</span>
+          <div class="task-note">${escapeHTML(job.error || statusText(job.status))}</div>
+        </div>
+        ${sublist}
+      </div>
+    `;
+  }
+
+  function statusText(status) {
+    if (status === "success") return "完成";
+    if (status === "running") return "执行中";
+    if (status === "failed") return "失败";
+    return "等待执行";
+  }
+
+  function moduleNameZh(moduleName) {
+    return {
+      stockcomment: "千股千评",
+      financial: "财务",
+      industry: "行业",
+      notice_risk: "公告",
+      valuation: "估值"
+    }[moduleName] || moduleName || "--";
+  }
+
+  function renderEmpty(title, body) {
+    rBody.innerHTML = `
+      <div class="empty">
+        <div class="empty-title">${escapeHTML(title)}</div>
+        <div>${escapeHTML(body)}</div>
+      </div>
+    `;
+    result.classList.remove("hidden", "loading");
+  }
+
+  function renderChips(items) {
+    suggestions.innerHTML = '<span class="suggest-label">已缓存：</span>' + items.map(item => `
+      <button class="chip" data-code="${escapeHTML(item.stock_code)}" type="button">
+        ${escapeHTML(item.stock_code)}<span class="chip-name">${escapeHTML(item.stock_name || item.industry_name || "")}</span>
+      </button>
+    `).join("");
+    suggestions.querySelectorAll(".chip").forEach(chip => {
+      chip.addEventListener("click", () => {
+        input.value = chip.dataset.code;
+        loadSummary(chip.dataset.code);
+      });
+    });
+  }
+
+  async function loadStocks() {
+    try {
+      const data = await api("/api/stocks");
+      renderChips(data.items || []);
+      footerCacheCount.textContent = String(data.count ?? 0);
+      topStatus.innerHTML = '<span class="dot"></span>本地服务 · API 已连接';
+      return data.items || [];
+    } catch (error) {
+      topStatus.innerHTML = '<span class="dot"></span>本地服务 · API 未连接';
+      footerCacheCount.textContent = "--";
+      setMeta("API 异常", error.message, "warn");
+      renderEmpty("本地 API 未连接", "请先启动 FastAPI 服务，再刷新页面。");
+      return [];
+    }
+  }
+
+  async function loadTasks() {
+    try {
+      const data = await api("/api/jobs?limit=5");
+      renderTasks(data.items || []);
+    } catch (error) {
+      taskPanelSubtitle.textContent = "任务面板不可用";
+      taskList.innerHTML = `<div class="task-item"><div class="task-version">Error</div><div class="task-stock">ERR</div><div class="task-note">${escapeHTML(error.message)}</div></div>`;
+    }
+  }
+
+  async function loadSummary(code) {
+    const runId = ++currentRun;
+    code = String(code || "").trim();
+    if (!/^\d{6}$/.test(code)) {
+      resetSteps();
+      setStep(1, "error", "代码格式无效");
+      setMeta("无效输入", "请输入 6 位 A 股代码，例如 000157、688256", "warn");
+      renderEmpty("代码格式无效", "请输入 6 位 A 股代码。");
+      return;
+    }
+
+    setBusy(true);
+    resetSteps();
+    setStep(1, "done", `已接收 ${code}`);
+    setStep(2, "active", "扫描 cache_manifest.json ...");
+    setMeta("", "正在检查本地抓取数据 ...");
+
+    try {
+      const summary = await api(`/api/stocks/${code}/summary`);
+      if (runId !== currentRun) return;
+      const moduleCount = Object.values(summary.modules || {}).filter(m => m.status === "success").length;
+      setStep(2, "done", `${moduleCount}/5 模块就绪`);
+      setStep(3, "done", "跳过 · 使用本地缓存");
+      setStep(4, "done", "已返回结果");
+      setMeta("缓存命中", "已读取本地 cleaned 数据 · 跳过抓取与模型调用");
+      renderResult(summary, { model: "本地摘要", cacheTag: summary.cache_hit ? "缓存命中" : "" });
+    } catch (error) {
+      if (runId !== currentRun) return;
+      currentCode = code;
+      if (error.status === 404) {
+        setStep(2, "done", "未找到缓存 · 自动开始抓取");
+        setMeta("新分析", "本地无缓存，正在自动提交抓取与分析任务 ...");
+        await analyzeAndPoll(code);
+        return;
+      }
+      setStep(2, "error", "缓存检查失败");
+      setMeta("检查失败", error.message, "warn");
+      renderEmpty("缓存检查失败", error.message);
+    } finally {
+      if (runId === currentRun) setBusy(false);
+    }
+  }
+
+  async function analyzeAndPoll(code) {
+    const runId = ++currentRun;
+    code = String(code || "").trim();
+    if (!/^\d{6}$/.test(code)) {
+      await loadSummary(code);
+      return;
+    }
+
+    setBusy(true);
+    showTaskPanel();
+    resetSteps();
+    setStep(1, "done", `已接收 ${code}`);
+    setStep(2, "done", "准备触发后端分析");
+    setStep(3, "active", "抓取 / 清洗 / 分析中 ...");
+    setMeta("新分析", "任务已提交，正在等待后端完成 ...");
+
+    try {
+      const job = await api(`/api/stocks/${code}/analyze?force=true`, { method: "POST" });
+      if (job.deduplicated) {
+        setMeta("任务复用", "该股票已有分析任务正在运行，已接入现有任务进度 ...");
+      }
+      const finalJob = await pollJob(job.job_id, runId);
+      if (runId !== currentRun) return;
+      if (finalJob.status !== "success") {
+        throw new Error(finalJob.error || "分析任务失败");
+      }
+      setStep(3, "done", "后端分析完成");
+      setStep(4, "active", "刷新摘要 ...");
+      const summary = await api(`/api/stocks/${code}/summary`);
+      setStep(4, "done", "已返回结果");
+      setMeta("分析完成", "已刷新本地 cleaned 数据并生成摘要");
+      renderResult(summary, { model: "本地摘要", cacheTag: "" });
+      await loadStocks();
+    } catch (error) {
+      if (runId !== currentRun) return;
+      setStep(3, "error", "分析失败");
+      setMeta("分析失败", error.message, "warn");
+      renderEmpty("分析任务失败", error.message);
+    } finally {
+      if (runId === currentRun) {
+        setBusy(false);
+        hideTaskPanel();
+      }
+    }
+  }
+
+  async function pollJob(jobId, runId) {
+    for (;;) {
+      if (runId !== currentRun) throw new Error("任务已取消");
+      const job = await api(`/api/jobs/${jobId}`);
+      renderTasks([job]);
+      if (job.status === "queued") {
+        setStep(3, "active", "任务排队中 ...");
+        setMeta("任务排队", `任务 ${job.job_id.slice(0, 8)} 等待执行 ...`);
+      } else if (job.status === "running") {
+        setStep(3, "active", "抓取 / 清洗 / 分析中 ...");
+        setMeta("任务运行", `任务 ${job.job_id.slice(0, 8)} 正在执行 ...`);
+      } else {
+        return job;
+      }
+      await new Promise(resolve => setTimeout(resolve, 1200));
+    }
+  }
+
+  form.addEventListener("submit", event => {
+    event.preventDefault();
+    loadSummary(input.value);
+  });
+
+  input.addEventListener("input", () => {
+    input.value = input.value.replace(/\D/g, "").slice(0, 6);
+  });
+
+  btnRerun.addEventListener("click", () => {
+    analyzeAndPoll(input.value || currentCode || rCode.textContent.slice(0, 6));
+  });
+
+  btnCopy.addEventListener("click", () => {
+    const text = Array.from(rBody.querySelectorAll(".result-section")).map(section => {
+      const title = section.querySelector("h3 .zh")?.textContent || "";
+      const body = Array.from(section.querySelectorAll("p")).map(p => p.textContent).join("\n");
+      return `## ${title}\n${body}`;
+    }).join("\n\n");
+    const header = `${rName.textContent.trim()} ${rCode.textContent}\n分析时间 ${rTime.textContent}\n\n`;
+    navigator.clipboard?.writeText(header + text);
+    btnCopy.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="m3 8 3 3 7-7"/></svg>已复制';
+    setTimeout(() => {
+      btnCopy.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="9" height="11" rx="1"/><path d="M5 1h8a1 1 0 0 1 1 1v9"/></svg>复制';
+    }, 1400);
+  });
+
+  async function init() {
+    const stocks = await loadStocks();
+    hideTaskPanel();
+    const firstCode = input.value || stocks[0]?.stock_code || "000157";
+    input.value = firstCode;
+    await loadSummary(firstCode);
+  }
+
+  init();
+})();
+</script>
+
+</body>
+</html>

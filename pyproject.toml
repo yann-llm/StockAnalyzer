@@ -1,0 +1,17 @@
+[project]
+name = "eastmoney"
+version = "0.1.0"
+description = "Eastmoney data fetchers and cleaners for stock and industry analysis."
+requires-python = ">=3.11"
+dependencies = [
+    "requests>=2.32.0",
+    "openai>=1.100.0",
+    "playwright>=1.60.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["."]
+python_files = ["test_*.py"]
