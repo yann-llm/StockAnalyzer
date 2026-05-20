@@ -17,6 +17,7 @@ from stockcomment import clean_stockcomment_data, fetch_stockcomment_data
 from stockcomment.stockcomment_llm_analyzer import analyze_stockcomment
 from valuation import clean_valuation_data, fetch_valuation_data
 from valuation.valuation_llm_analyzer import analyze_valuation
+from final_evaluation_llm_analyzer import analyze_final_evaluation
 from financial.financial_llm_analyzer import analyze_financial_reports
 
 
@@ -26,7 +27,7 @@ PROJECT_DIR = Path(__file__).resolve().parent
 DATA_DIR = PROJECT_DIR / "data"
 LOCAL_TZ = timezone(timedelta(hours=8))
 ANALYSIS_MODULES = ("stockcomment", "financial", "industry", "notice_risk", "valuation")
-LLM_PROGRESS_INTERVAL_SECONDS = 5
+LLM_PROGRESS_INTERVAL_SECONDS = 1
 MODULE_WORKERS = len(ANALYSIS_MODULES)
 
 
@@ -88,6 +89,13 @@ def is_cache_usable(stock_code: str, current_time: datetime) -> bool:
         if not (base_dir / raw_file).exists() or not (base_dir / cleaned_file).exists():
             return False
 
+    final_evaluation = manifest.get("final_evaluation", {})
+    final_file = final_evaluation.get("analysis_file") if isinstance(final_evaluation, dict) else None
+    if not final_file or final_evaluation.get("analysis_status") != "success":
+        return False
+    if not (base_dir / final_file).exists():
+        return False
+
     return True
 
 
@@ -100,6 +108,7 @@ def load_cached_result(stock_code: str) -> dict[str, Any]:
         "generated_at": manifest.get("generated_at"),
         "expires_at": manifest.get("expires_at"),
         "modules": manifest.get("modules", {}),
+        "final_evaluation": manifest.get("final_evaluation", {}),
     }
 
 
@@ -248,6 +257,69 @@ def save_module_analysis(
     }
 
 
+def load_module_analyses(stock_code: str, module_results: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    base_dir = stock_data_dir(stock_code)
+    analyses: dict[str, dict[str, Any]] = {}
+    for module_name, info in module_results.items():
+        if info.get("analysis_status") != "success":
+            continue
+        analysis_file = info.get("analysis_file")
+        if not analysis_file:
+            continue
+        analyses[module_name] = read_json(base_dir / analysis_file)
+    return analyses
+
+
+def save_final_evaluation(
+    stock_code: str,
+    generated_at: datetime,
+    module_results: dict[str, dict[str, Any]],
+    progress: Callable[[str, str, str, str | None], None] | None = None,
+) -> dict[str, Any]:
+    base_dir = stock_data_dir(stock_code)
+    stamp = timestamp_for_file(generated_at)
+    analysis_relative = Path("analysis") / f"final_evaluation_{stamp}.json"
+    error_relative = Path("analysis") / f"final_evaluation_error_{stamp}.json"
+
+    try:
+        notify_progress(progress, "final_evaluation", "llm", "running", "汇总五大模块结论")
+        module_analyses = load_module_analyses(stock_code, module_results)
+        missing_modules = [module_name for module_name in ANALYSIS_MODULES if module_name not in module_analyses]
+        if missing_modules:
+            raise ValueError(f"missing successful module analysis: {', '.join(missing_modules)}")
+        if not module_analyses:
+            raise ValueError("no successful module analysis is available for final evaluation")
+        analysis = run_llm_postprocess_with_progress(
+            module_analyses,
+            lambda analyses: analyze_final_evaluation(stock_code, analyses),
+            progress,
+            "final_evaluation",
+        )
+        write_json(base_dir / analysis_relative, analysis)
+        notify_progress(progress, "final_evaluation", "llm", "success", "最终投资结论已生成")
+        return {
+            "analysis_status": "success",
+            "analysis_file": analysis_relative.as_posix(),
+            "module_count": len(module_analyses),
+        }
+    except Exception as exc:  # noqa: BLE001 - persist final evaluation failure without hiding module results.
+        notify_progress(progress, "final_evaluation", "llm", "failed", str(exc))
+        error_data = {
+            "stock_code": stock_code,
+            "module": "final_evaluation",
+            "generated_at": isoformat(generated_at),
+            "stage": "analysis",
+            "error": str(exc),
+        }
+        write_json(base_dir / error_relative, error_data)
+        print(f"[失败] final_evaluation 分析: {exc}")
+        return {
+            "analysis_status": "failed",
+            "analysis_error": str(exc),
+            "analysis_error_file": error_relative.as_posix(),
+        }
+
+
 def fetch_industry_for_stock(stock_code: str) -> dict[str, Any]:
     mapping = fetch_valuation_industry_mapping(stock_code)
     industry_code = mapping.get("bk_code")
@@ -364,6 +436,7 @@ def run_stock_analysis(
         return load_cached_result(stock_code)
 
     module_results = run_modules_parallel(stock_code, generated_at, progress)
+    final_evaluation = save_final_evaluation(stock_code, generated_at, module_results, progress)
 
     expires_at = generated_at + timedelta(seconds=CACHE_SECONDS)
     manifest = {
@@ -372,6 +445,7 @@ def run_stock_analysis(
         "expires_at": isoformat(expires_at),
         "cache_seconds": CACHE_SECONDS,
         "modules": module_results,
+        "final_evaluation": final_evaluation,
     }
     write_json(cache_manifest_path(stock_code), manifest)
 
@@ -383,6 +457,7 @@ def run_stock_analysis(
         "cache_manifest": str(cache_manifest_path(stock_code)),
         "summary_file": str(summary_path),
         "modules": module_results,
+        "final_evaluation": final_evaluation,
     }
 
 

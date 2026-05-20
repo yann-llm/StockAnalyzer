@@ -16,6 +16,7 @@ _jobs: dict[str, dict[str, Any]] = {}
 _lock = Lock()
 MAX_JOBS = 50
 MODULE_NAMES = ("stockcomment", "financial", "industry", "notice_risk", "valuation")
+TASK_NAMES = (*MODULE_NAMES, "final_evaluation")
 STAGE_NAMES = {
     "cache": "缓存",
     "fetch": "抓取",
@@ -56,7 +57,7 @@ def submit_stock_analysis(stock_code: str, force_refresh: bool = False) -> dict[
 
 
 def submit_module_llm_analysis(stock_code: str, module_name: str) -> dict[str, Any]:
-    if module_name not in MODULE_NAMES:
+    if module_name not in TASK_NAMES:
         raise ValueError(f"unsupported module: {module_name}")
 
     job_id = uuid4().hex
@@ -86,7 +87,7 @@ def submit_module_llm_analysis(stock_code: str, module_name: str) -> dict[str, A
 
 
 def rerun_module_llm_analysis(stock_code: str, module_name: str, job_id: str | None = None) -> dict[str, Any]:
-    if module_name not in MODULE_NAMES:
+    if module_name not in TASK_NAMES:
         raise ValueError(f"unsupported module: {module_name}")
 
     from financial.financial_llm_analyzer import analyze_financial_reports
@@ -96,6 +97,7 @@ def rerun_module_llm_analysis(stock_code: str, module_name: str, job_id: str | N
         now_local,
         read_json,
         run_llm_postprocess_with_progress,
+        save_final_evaluation,
         save_module_analysis,
         stock_data_dir,
         write_json,
@@ -115,6 +117,80 @@ def rerun_module_llm_analysis(stock_code: str, module_name: str, job_id: str | N
     manifest_file = cache_manifest_path(stock_code)
     manifest = read_json(manifest_file)
     modules = manifest.setdefault("modules", {})
+
+    if module_name == "final_evaluation":
+        generated_at = now_local()
+        for dependency_name in MODULE_NAMES:
+            dependency_info = modules.get(dependency_name)
+            if not isinstance(dependency_info, dict):
+                raise ValueError(f"module not recorded in manifest: {dependency_name}")
+            if dependency_info.get("analysis_status") == "success" and dependency_info.get("analysis_file"):
+                if job_id:
+                    update_module_task(job_id, dependency_name, "llm", "success", "已有大模型分析结果")
+                continue
+            cleaned_file = dependency_info.get("cleaned_file")
+            if not cleaned_file:
+                raise ValueError(f"module has no cleaned file: {dependency_name}")
+            cleaned_payload = read_json(stock_data_dir(stock_code) / Path(cleaned_file))
+            cleaned_data = cleaned_payload.get("data", cleaned_payload)
+            if job_id:
+                update_module_task(job_id, dependency_name, "llm", "running", "补齐大模型分析")
+            try:
+                dependency_result = run_llm_postprocess_with_progress(
+                    cleaned_data,
+                    lambda data, dep=dependency_name: save_module_analysis(
+                        stock_code,
+                        dep,
+                        generated_at,
+                        data,
+                        analyzers[dep],
+                    ),
+                    (lambda module, stage, status, message=None: update_module_task(job_id, module, stage, status, message))
+                    if job_id
+                    else None,
+                    dependency_name,
+                )
+            except Exception as exc:  # noqa: BLE001 - persist dependency failure before final evaluation.
+                dependency_info.update(
+                    {
+                        "status": "failed",
+                        "analysis_status": "failed",
+                        "analysis_error": str(exc),
+                        "error": str(exc),
+                    }
+                )
+                write_json(manifest_file, manifest)
+                raise
+            dependency_info.update(
+                {
+                    "status": "success",
+                    "analysis_status": "success",
+                    "analysis_file": dependency_result.get("analysis_file"),
+                    "analysis_error": None,
+                    "error": None,
+                }
+            )
+            if job_id:
+                update_module_task(job_id, dependency_name, "llm", "success", "大模型分析已补齐")
+        manifest["final_evaluation"] = save_final_evaluation(
+            stock_code,
+            generated_at,
+            modules,
+            (lambda module, stage, status, message=None: update_module_task(job_id, module, stage, status, message))
+            if job_id
+            else None,
+        )
+        write_json(manifest_file, manifest)
+        final_status = manifest["final_evaluation"].get("analysis_status")
+        if final_status != "success":
+            raise ValueError(manifest["final_evaluation"].get("analysis_error") or "final evaluation failed")
+        return {
+            "stock_code": stock_code,
+            "module": module_name,
+            "status": "success",
+            "final_evaluation": manifest.get("final_evaluation"),
+        }
+
     module_info = modules.get(module_name)
     if not isinstance(module_info, dict):
         raise ValueError(f"module not recorded in manifest: {module_name}")
@@ -167,6 +243,16 @@ def rerun_module_llm_analysis(stock_code: str, module_name: str, job_id: str | N
             "error": None,
         }
     )
+    if job_id:
+        update_module_task(job_id, "final_evaluation", "llm", "running", "刷新最终投资结论")
+    manifest["final_evaluation"] = save_final_evaluation(
+        stock_code,
+        generated_at,
+        modules,
+        (lambda module, stage, status, message=None: update_module_task(job_id, module, stage, status, message))
+        if job_id
+        else None,
+    )
     write_json(manifest_file, manifest)
     if job_id:
         update_module_task(job_id, module_name, "module", "success", "模块大模型分析完成")
@@ -174,6 +260,7 @@ def rerun_module_llm_analysis(stock_code: str, module_name: str, job_id: str | N
         "stock_code": stock_code,
         "module": module_name,
         "status": "success",
+        "final_evaluation": manifest.get("final_evaluation"),
         **analysis_result,
     }
 
@@ -226,6 +313,7 @@ def _run_job(job_id: str, stock_code: str, force_refresh: bool) -> None:
         "stock_code": result.get("stock_code", stock_code),
         "status": result.get("status"),
         "modules": result.get("modules", {}),
+        "final_evaluation": result.get("final_evaluation", {}),
         "summary_file": result.get("summary_file"),
         "cache_manifest": result.get("cache_manifest"),
     }
@@ -244,6 +332,7 @@ def _run_module_llm_job(job_id: str, stock_code: str, module_name: str) -> None:
         "status": result.get("status"),
         "module": module_name,
         "analysis_file": result.get("analysis_file"),
+        "final_evaluation": result.get("final_evaluation"),
     }
     update_job(job_id, status="success", finished_at=now_text(), result=result, summary=summary)
 
@@ -280,7 +369,7 @@ def initial_module_tasks(active_module: str | None = None) -> list[dict[str, Any
             "message": "等待执行" if active_module is None or module_name == active_module else "本次不执行",
             "updated_at": None,
         }
-        for module_name in MODULE_NAMES
+        for module_name in TASK_NAMES
     ]
 
 

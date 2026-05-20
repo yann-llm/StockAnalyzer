@@ -400,7 +400,7 @@
   }
   .stepper-row {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     gap: 0;
     margin-block-end: 14px;
   }
@@ -776,10 +776,10 @@
     color: oklch(48% 0.14 65);
     border-color: oklch(68% 0.16 70 / 0.25);
   }
-  .module-pill.failed {
+  .module-pill.clickable {
     cursor: pointer;
   }
-  .module-pill.failed:hover {
+  .module-pill.clickable:hover {
     background: oklch(94% 0.055 75);
     border-color: oklch(68% 0.16 70 / 0.38);
   }
@@ -1054,8 +1054,13 @@
           </div>
           <div class="step done" data-step="4">
             <div class="dot"></div>
+            <div class="step-name">投资结论</div>
+            <div class="step-sub" id="sub-4">已生成投资结论</div>
+          </div>
+          <div class="step done" data-step="5">
+            <div class="dot"></div>
             <div class="step-name">分析完成</div>
-            <div class="step-sub" id="sub-4">已返回结果</div>
+            <div class="step-sub" id="sub-5">已返回结果</div>
           </div>
         </div>
         <div class="stepper-meta" id="stepper-meta">
@@ -1253,7 +1258,8 @@
     document.getElementById("sub-1"),
     document.getElementById("sub-2"),
     document.getElementById("sub-3"),
-    document.getElementById("sub-4")
+    document.getElementById("sub-4"),
+    document.getElementById("sub-5")
   ];
   const metaTag = document.getElementById("meta-tag");
   const metaText = document.getElementById("meta-text");
@@ -1275,7 +1281,7 @@
     subs.forEach(s => s.textContent = "");
   }
   function setStep(idx, state) {
-    // idx 1..4; state = 'done' | 'active' | 'error'
+    // idx 1..5; state = 'done' | 'active' | 'error'
     const el = steps[idx - 1];
     el.classList.remove("done", "active", "error");
     if (state) el.classList.add(state);
@@ -1389,7 +1395,9 @@
       setStep(3, "done");
       subs[2].textContent = "跳过 · 命中缓存";
       setStep(4, "done");
-      subs[3].textContent = "已返回结果";
+      subs[3].textContent = "投资结论已生成";
+      setStep(5, "done");
+      subs[4].textContent = "已返回结果";
       setMeta("缓存命中", `已命中缓存 · 跳过数据抓取与模型调用 · 耗时 ${130 + Math.floor(Math.random()*40)}ms`);
 
       renderResult(cached, {
@@ -1431,7 +1439,9 @@
     setStep(3, "done");
     subs[2].textContent = "已生成 · 6 个文本区块";
     setStep(4, "done");
-    subs[3].textContent = "已返回结果";
+    subs[3].textContent = "投资结论已生成";
+    setStep(5, "done");
+    subs[4].textContent = "已返回结果";
 
     const totalMs = 3000 + Math.floor(Math.random()*400);
     setMeta("新抓取", `数据抓取 + 模型分析完成 · 共 ${totalMs}ms`);
@@ -1498,7 +1508,8 @@
     document.getElementById("sub-1"),
     document.getElementById("sub-2"),
     document.getElementById("sub-3"),
-    document.getElementById("sub-4")
+    document.getElementById("sub-4"),
+    document.getElementById("sub-5")
   ];
   const metaTag = document.getElementById("meta-tag");
   const metaText = document.getElementById("meta-text");
@@ -1706,10 +1717,11 @@
     }).join("");
     moduleStatuses.innerHTML = Object.entries(summary.modules || {}).map(([name, info]) => {
       const status = info.status || "missing";
-      const retryAttrs = status === "failed"
-        ? ` role="button" tabindex="0" data-module-retry="${escapeHTML(name)}" title="重新执行 ${escapeHTML(name)} 的大模型分析"`
+      const canRetry = status === "failed" || (name === "final_evaluation" && status === "missing");
+      const retryAttrs = canRetry
+        ? ` role="button" tabindex="0" data-module-retry="${escapeHTML(name)}" title="重新执行 ${escapeHTML(moduleNameZh(name))} 的大模型分析"`
         : "";
-      return `<span class="module-pill ${escapeHTML(status)}"${retryAttrs}>${escapeHTML(name)} · ${escapeHTML(status)}</span>`;
+      return `<span class="module-pill ${escapeHTML(status)}${canRetry ? " clickable" : ""}"${retryAttrs}>${escapeHTML(moduleNameZh(name))} · ${escapeHTML(status)}</span>`;
     }).join("");
     result.classList.remove("hidden", "loading");
     footerLastCode.textContent = summary.stock_code;
@@ -1775,7 +1787,8 @@
       financial: "财务",
       industry: "行业",
       notice_risk: "公告",
-      valuation: "估值"
+      valuation: "估值",
+      final_evaluation: "投资结论"
     }[moduleName] || moduleName || "--";
   }
 
@@ -1860,11 +1873,19 @@
     try {
       const summary = await api(`/api/stocks/${code}/summary`);
       if (runId !== currentRun) return;
-      const moduleCount = Object.values(summary.modules || {}).filter(m => m.file_exists).length;
+      const moduleCount = Object.entries(summary.modules || {})
+        .filter(([name, info]) => name !== "final_evaluation" && info.file_exists)
+        .length;
       setStep(2, "done", `${moduleCount}/5 模块清洗就绪`);
       setStep(3, "done", "跳过 · 使用本地缓存");
-      setStep(4, "done", "已返回结果");
-      setMeta("缓存命中", "已读取本地 cleaned 数据 · 跳过抓取与模型调用");
+      if (summary.final_evaluation?.analysis_status === "success") {
+        setStep(4, "done", "投资结论已生成");
+        setStep(5, "done", "已返回结果");
+        setMeta("缓存命中", "已读取本地 cleaned 数据与投资结论");
+      } else {
+        setStep(4, "active", "等待生成投资结论");
+        setMeta("缺少投资结论", "已读取本地数据，但投资结论尚未生成，可点击投资结论标签补齐", "warn");
+      }
       renderResult(summary, { model: "本地摘要", cacheTag: summary.cache_hit ? "缓存命中" : "" });
     } catch (error) {
       if (runId !== currentRun) return;
@@ -1899,6 +1920,8 @@
     setStep(1, "done", `已接收 ${code}`);
     setStep(2, "done", "准备触发后端分析");
     setStep(3, "active", "抓取 / 清洗 / 分析中 ...");
+    setStep(4, "", "");
+    setStep(5, "", "");
     setMeta("新分析", "任务已提交，正在等待后端完成 ...");
 
     try {
@@ -1912,10 +1935,16 @@
         throw new Error(finalJob.error || "分析任务失败");
       }
       const hasFailedModule = (finalJob.module_tasks || []).some(task => task.status === "failed");
-      setStep(3, "done", "后端分析完成");
-      setStep(4, "active", "刷新摘要 ...");
+      const finalTask = (finalJob.module_tasks || []).find(task => task.module === "final_evaluation");
+      if (finalTask?.status !== "success") {
+        setStep(4, finalTask?.status === "failed" ? "error" : "active", finalTask?.message || "投资结论未完成");
+        throw new Error(finalTask?.message || finalJob.summary?.final_evaluation?.analysis_error || "投资结论未完成");
+      }
+      setStep(3, "done", "子模块大模型分析完成");
+      setStep(4, "done", "投资结论已生成");
+      setStep(5, "active", "刷新摘要 ...");
       const summary = await api(`/api/stocks/${code}/summary`);
-      setStep(4, "done", "已返回结果");
+      setStep(5, "done", "已返回结果");
       setMeta("分析完成", "已刷新本地 cleaned 数据并生成摘要");
       renderResult(summary, { model: "本地摘要", cacheTag: "" });
       await loadStocks();
@@ -1945,9 +1974,14 @@
     showTaskPanel();
     resetSteps();
     setStep(1, "done", `已接收 ${code}`);
-    setStep(2, "done", `复用 ${moduleNameZh(moduleName)} cleaned 数据`);
-    setStep(3, "active", "等待大模型分析 ...");
-    setMeta("模块重跑", `正在重新执行 ${moduleNameZh(moduleName)} 的大模型分析 ...`);
+    const isFinalEvaluation = moduleName === "final_evaluation";
+    setStep(2, "done", isFinalEvaluation ? "检查并补齐五大模块分析结果" : `复用 ${moduleNameZh(moduleName)} cleaned 数据`);
+    setStep(3, isFinalEvaluation ? "done" : "active", isFinalEvaluation ? "检查子模块分析结果" : "等待大模型分析 ...");
+    setStep(4, isFinalEvaluation ? "active" : "", isFinalEvaluation ? "等待投资结论生成 ..." : "");
+    setStep(5, "", "");
+    setMeta("模块重跑", isFinalEvaluation
+      ? "正在补齐缺失模块分析并生成投资结论 ..."
+      : `正在重新执行 ${moduleNameZh(moduleName)} 的大模型分析 ...`);
     try {
       const job = await api(`/api/stocks/${code}/modules/${moduleName}/reanalyze`, { method: "POST" });
       const finalJob = await pollJob(job.job_id, runId);
@@ -1955,17 +1989,18 @@
       if (finalJob.status !== "success") {
         throw new Error(finalJob.error || `${moduleNameZh(moduleName)} 分析失败`);
       }
-      setStep(3, "done", "大模型分析完成");
-      setStep(4, "active", "刷新摘要 ...");
+      setStep(3, "done", isFinalEvaluation ? "子模块分析已补齐" : "大模型分析完成");
+      setStep(4, "done", "投资结论已生成");
+      setStep(5, "active", "刷新摘要 ...");
       const summary = await api(`/api/stocks/${code}/summary`);
-      setStep(4, "done", "已返回结果");
+      setStep(5, "done", "已返回结果");
       setMeta("模块完成", `${moduleNameZh(moduleName)} 大模型分析已重新生成`);
       renderResult(summary, { model: "本地摘要", cacheTag: summary.cache_hit ? "缓存命中" : "" });
       await loadStocks();
     } catch (error) {
       if (runId !== currentRun) return;
       keepTaskPanel = true;
-      setStep(3, "error", "模块分析失败");
+      setStep(isFinalEvaluation ? 4 : 3, "error", `${moduleNameZh(moduleName)}失败`);
       setMeta("模块失败", error.message, "warn");
       renderEmpty(`${moduleNameZh(moduleName)} 分析失败`, error.message);
     } finally {
@@ -1989,12 +2024,18 @@
         const activeStage = activeModule
           ? `${moduleNameZh(activeModule.module)} · ${activeModule.message || activeModule.stage_name || "执行中"}`
           : "抓取 / 清洗 / 分析中 ...";
-        setStep(3, "active", activeStage);
+        if (activeModule?.module === "final_evaluation") {
+          setStep(3, "done", "子模块大模型分析完成");
+          setStep(4, "active", activeModule.message || "生成投资结论中 ...");
+        } else {
+          setStep(3, "active", activeStage);
+          setStep(4, "", "");
+        }
         setMeta("任务运行", `任务 ${job.job_id.slice(0, 8)} 正在执行 ...`);
       } else {
         return job;
       }
-      await new Promise(resolve => setTimeout(resolve, 1200));
+      await new Promise(resolve => setTimeout(resolve, 1000));
     }
   }
 
@@ -2018,7 +2059,7 @@
     const moduleName = retryButton.dataset.retryModule;
     input.value = code;
     setMeta("重新执行", `${moduleNameZh(moduleName)} 模块失败，正在重新执行 ${code} 的分析任务 ...`);
-    analyzeAndPoll(code);
+    reanalyzeModule(moduleName);
   });
 
   moduleStatuses.addEventListener("click", event => {

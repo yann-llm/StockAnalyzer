@@ -12,6 +12,7 @@ from typing import Any
 PROJECT_DIR = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_DIR / "data"
 EXPECTED_MODULES = ("financial", "industry", "notice_risk", "stockcomment", "valuation")
+STATUS_MODULES = (*EXPECTED_MODULES, "final_evaluation")
 
 
 class DataStoreError(Exception):
@@ -90,6 +91,19 @@ def load_analysis_module(stock_code: str, module_name: str, modules: dict[str, d
         return None
 
 
+def load_final_evaluation(stock_code: str, manifest: dict[str, Any]) -> dict[str, Any] | None:
+    info = manifest.get("final_evaluation")
+    if not isinstance(info, dict) or info.get("analysis_status") != "success":
+        return None
+    analysis_file = info.get("analysis_file")
+    if not analysis_file:
+        return None
+    try:
+        return read_json(stock_dir(stock_code) / analysis_file)
+    except DataStoreError:
+        return None
+
+
 def build_stocks_index() -> list[dict[str, Any]]:
     return [build_stock_index_item(code) for code in list_stock_codes()]
 
@@ -122,6 +136,7 @@ def build_stock_summary(stock_code: str) -> dict[str, Any]:
     modules = build_module_statuses(code, manifest)
     cleaned = load_successful_modules(code, modules)
     analysis = load_successful_analysis(code, modules)
+    final_evaluation = load_final_evaluation(code, manifest)
 
     valuation_latest = dig(cleaned.get("valuation"), "data", "latest") or {}
     industry_data = dig(cleaned.get("industry"), "data") or {}
@@ -141,17 +156,35 @@ def build_stock_summary(stock_code: str) -> dict[str, Any]:
         "cache_hit": all(info.get("status") == "success" for info in modules.values()),
         "data_source": f"data/{code}/cleaned/",
         "modules": modules,
+        "final_evaluation": build_final_evaluation_summary(final_evaluation, manifest),
         "metrics": build_metrics(cleaned),
         "ability_scores": build_ability_scores(cleaned, analysis),
         "risk_flags": collect_risk_flags(cleaned),
-        "sections": build_sections(cleaned, analysis, stock_name, industry_name),
+        "sections": build_sections(cleaned, analysis, final_evaluation, stock_name, industry_name),
     }
 
 
 def build_module_statuses(stock_code: str, manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
     statuses: dict[str, dict[str, Any]] = {}
     manifest_modules = manifest.get("modules", {})
-    for module_name in EXPECTED_MODULES:
+    for module_name in STATUS_MODULES:
+        if module_name == "final_evaluation":
+            info = manifest.get("final_evaluation", {})
+            analysis_file = info.get("analysis_file") if isinstance(info, dict) else None
+            file_exists = bool(analysis_file and (stock_dir(stock_code) / analysis_file).exists())
+            analysis_status = info.get("analysis_status") if isinstance(info, dict) else None
+            status = "success" if analysis_status == "success" else analysis_status or "missing"
+            if status == "success" and not file_exists:
+                status = "missing_file"
+            statuses[module_name] = {
+                "status": status,
+                "cleaned_file": None,
+                "analysis_status": analysis_status,
+                "analysis_file": analysis_file,
+                "file_exists": file_exists,
+                "error": info.get("analysis_error") if isinstance(info, dict) else None,
+            }
+            continue
         info = manifest_modules.get(module_name, {})
         cleaned_file = info.get("cleaned_file") if isinstance(info, dict) else None
         file_exists = bool(cleaned_file and (stock_dir(stock_code) / cleaned_file).exists())
@@ -256,6 +289,7 @@ def clamp_score(value: Any) -> float | None:
 def build_sections(
     cleaned: dict[str, dict[str, Any]],
     analysis: dict[str, dict[str, Any]],
+    final_evaluation: dict[str, Any] | None,
     stock_name: str,
     industry_name: str | None,
 ) -> list[dict[str, Any]]:
@@ -263,7 +297,8 @@ def build_sections(
         {
             "key": "thesis",
             "title": "投资结论",
-            "body": build_thesis(cleaned, stock_name, industry_name),
+            "body": build_final_evaluation_text(final_evaluation) or build_thesis(cleaned, stock_name, industry_name),
+            "items": build_final_evaluation_items(final_evaluation) or [],
         },
         {
             "key": "stockcomment",
@@ -328,6 +363,49 @@ def build_llm_section_items(payload: dict[str, Any] | None) -> list[dict[str, st
     return items or None
 
 
+def build_final_evaluation_summary(payload: dict[str, Any] | None, manifest: dict[str, Any]) -> dict[str, Any] | None:
+    info = manifest.get("final_evaluation")
+    if not isinstance(info, dict):
+        return None
+    analysis = payload.get("analysis") if isinstance(payload, dict) else None
+    return {
+        "analysis_status": info.get("analysis_status"),
+        "analysis_file": info.get("analysis_file"),
+        "analysis_error": info.get("analysis_error"),
+        "module_count": info.get("module_count"),
+        "final_score": analysis.get("最终评分") if isinstance(analysis, dict) else None,
+        "investment_conclusion": analysis.get("投资结论") if isinstance(analysis, dict) else None,
+    }
+
+
+def build_final_evaluation_text(payload: dict[str, Any] | None) -> str | None:
+    analysis = payload.get("analysis") if isinstance(payload, dict) else None
+    if not isinstance(analysis, dict):
+        return None
+    conclusion = stringify_analysis_value(analysis.get("投资结论"))
+    advice = stringify_analysis_value(analysis.get("操作建议"))
+    evidence = stringify_analysis_value(analysis.get("核心依据"))
+    risk = stringify_analysis_value(analysis.get("主要风险"))
+    position = stringify_analysis_value(analysis.get("仓位建议"))
+    return "；".join(part for part in [conclusion, advice, evidence, risk, position] if part) or None
+
+
+def build_final_evaluation_items(payload: dict[str, Any] | None) -> list[dict[str, str]] | None:
+    analysis = payload.get("analysis") if isinstance(payload, dict) else None
+    if not isinstance(analysis, dict):
+        return None
+    fields = [
+        ("最终评分", format_score(analysis.get("最终评分"))),
+        ("投资结论", stringify_analysis_value(analysis.get("投资结论"))),
+        ("仓位建议", stringify_analysis_value(analysis.get("仓位建议"))),
+        ("操作建议", stringify_analysis_value(analysis.get("操作建议"))),
+        ("核心依据", stringify_analysis_value(analysis.get("核心依据"))),
+        ("主要风险", stringify_analysis_value(analysis.get("主要风险"))),
+    ]
+    items = [{"label": label, "value": value} for label, value in fields if value]
+    return items or None
+
+
 def format_score(value: Any) -> str:
     if value is None:
         return ""
@@ -342,16 +420,32 @@ def stringify_analysis_value(value: Any) -> str:
     if value is None:
         return ""
     if isinstance(value, str):
-        return value.strip()
+        return simplify_display_numbers(value.strip())
     if isinstance(value, list):
-        return "；".join(str(item).strip() for item in value if str(item).strip())
+        return "；".join(item_text for item in value if (item_text := stringify_analysis_value(item)))
     if isinstance(value, dict):
         return "；".join(
             f"{key}: {stringify_analysis_value(item)}"
             for key, item in value.items()
             if stringify_analysis_value(item)
         )
-    return str(value)
+    return simplify_display_numbers(str(value))
+
+
+def simplify_display_numbers(text: str) -> str:
+    text = re.sub(r"(?<![\d.])(-?\d+(?:\.\d+)?)元", _format_yuan_match, text)
+    text = re.sub(r"(?<![\d.])(-?\d+\.\d+)%", lambda match: f"{format_number(float(match.group(1)))}%", text)
+    return re.sub(r"(?<![\d.])(-?\d+\.\d{3,})(?![\d.])", lambda match: format_number(float(match.group(1))), text)
+
+
+def _format_yuan_match(match: re.Match[str]) -> str:
+    value = float(match.group(1))
+    abs_value = abs(value)
+    if abs_value >= 100_000_000:
+        return f"{format_number(value / 100_000_000)}亿元"
+    if abs_value >= 10_000:
+        return f"{format_number(value / 10_000)}万元"
+    return f"{format_number(value)}元"
 
 
 def build_thesis(cleaned: dict[str, dict[str, Any]], stock_name: str, industry_name: str | None) -> str:
