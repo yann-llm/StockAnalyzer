@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
-from api.services.analysis_runner import get_job, list_jobs, submit_stock_analysis
+from api.services.analysis_runner import get_job, list_jobs, submit_module_llm_analysis, submit_stock_analysis
 from api.services.data_store import (
     DataStoreError,
     PROJECT_DIR,
@@ -30,7 +30,7 @@ app.add_middleware(
 
 @app.get("/")
 def index() -> FileResponse:
-    return FileResponse(PROJECT_DIR / "eastmoney.html")
+    return FileResponse(PROJECT_DIR / "index.html")
 
 
 @app.get("/api/health")
@@ -63,6 +63,19 @@ def analyze_stock(stock_code: str, force: bool = False) -> dict[str, object]:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return submit_stock_analysis(code, force_refresh=force)
+
+
+@app.post("/api/stocks/{stock_code}/modules/{module_name}/reanalyze")
+def reanalyze_module(stock_code: str, module_name: str) -> dict[str, object]:
+    try:
+        code = normalize_stock_code(stock_code)
+        return submit_module_llm_analysis(code, module_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - surface analyzer failures to the local UI.
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.get("/api/jobs")

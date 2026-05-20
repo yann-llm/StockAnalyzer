@@ -251,6 +251,17 @@
     border-color: var(--border-strong);
     background: var(--surface-hover);
   }
+  .chip.cache-active {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-color: oklch(54% 0.17 252 / 0.32);
+    box-shadow: 0 0 0 3px oklch(54% 0.17 252 / 0.12);
+    font-weight: 700;
+  }
+  .chip.cache-active .chip-name {
+    color: var(--accent);
+    font-weight: 700;
+  }
   .chip .chip-name {
     font-family: var(--font-sans);
     color: var(--muted);
@@ -378,11 +389,13 @@
     overflow: hidden;
     position: fixed;
     inset-block-start: 84px;
-    inset-inline-start: 24px;
-    width: 280px;
+    inset-inline-start: 50%;
+    transform: translateX(-50%);
+    width: min(420px, calc(100vw - 48px));
     max-height: calc(100vh - 120px);
     overflow: auto;
     z-index: 10;
+    box-shadow: 0 16px 40px oklch(20% 0.02 240 / 0.16);
   }
   .task-panel-hidden {
     display: none;
@@ -517,6 +530,21 @@
   .task-substage {
     color: var(--muted);
   }
+  .task-substage.failed {
+    appearance: none;
+    border: 1px solid oklch(58% 0.21 25 / 0.18);
+    border-radius: 4px;
+    background: oklch(96% 0.03 25);
+    color: var(--up);
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 2px 6px;
+  }
+  .task-substage.failed:hover {
+    background: oklch(94% 0.04 25);
+    border-color: oklch(58% 0.21 25 / 0.35);
+  }
   .task-submsg {
     color: var(--muted);
     font-size: 11.5px;
@@ -623,6 +651,13 @@
     background: var(--warn-soft);
     color: oklch(48% 0.14 65);
     border-color: oklch(68% 0.16 70 / 0.25);
+  }
+  .module-pill.failed {
+    cursor: pointer;
+  }
+  .module-pill.failed:hover {
+    background: oklch(94% 0.055 75);
+    border-color: oklch(68% 0.16 70 / 0.38);
   }
   .result-actions {
     display: flex;
@@ -763,6 +798,7 @@
     .task-panel {
       position: static;
       inset: auto;
+      transform: none;
       width: auto;
       max-height: none;
     }
@@ -839,7 +875,7 @@
           <div class="step done" data-step="2">
             <div class="dot"></div>
             <div class="step-name">检查本地抓取数据</div>
-            <div class="step-sub" id="sub-2">5/5 模块就绪</div>
+            <div class="step-sub" id="sub-2">5/5 模块清洗就绪</div>
           </div>
           <div class="step done" data-step="3">
             <div class="dot"></div>
@@ -1179,7 +1215,7 @@
       if (runId !== currentRun) return;
 
       setStep(2, "done");
-      subs[1].textContent = "5/5 模块就绪";
+      subs[1].textContent = "5/5 模块清洗就绪";
       setStep(3, "done");
       subs[2].textContent = "跳过 · 命中缓存";
       setStep(4, "done");
@@ -1393,6 +1429,7 @@
     rModel.textContent = opts.model || "本地摘要";
     rCacheTag.textContent = opts.cacheTag || (summary.cache_hit ? "缓存命中" : "");
     rCacheTag.style.display = rCacheTag.textContent ? "" : "none";
+    highlightCachedChip(summary.cache_hit ? summary.stock_code : "");
 
     rBody.innerHTML = (summary.sections || []).map(section => {
       const items = Array.isArray(section.items) ? section.items : [];
@@ -1411,9 +1448,13 @@
         </section>
       `;
     }).join("");
-    moduleStatuses.innerHTML = Object.entries(summary.modules || {}).map(([name, info]) => `
-      <span class="module-pill ${escapeHTML(info.status || "missing")}">${escapeHTML(name)} · ${escapeHTML(info.status || "missing")}</span>
-    `).join("");
+    moduleStatuses.innerHTML = Object.entries(summary.modules || {}).map(([name, info]) => {
+      const status = info.status || "missing";
+      const retryAttrs = status === "failed"
+        ? ` role="button" tabindex="0" data-module-retry="${escapeHTML(name)}" title="重新执行 ${escapeHTML(name)} 的大模型分析"`
+        : "";
+      return `<span class="module-pill ${escapeHTML(status)}"${retryAttrs}>${escapeHTML(name)} · ${escapeHTML(status)}</span>`;
+    }).join("");
     result.classList.remove("hidden", "loading");
     footerLastCode.textContent = summary.stock_code;
   }
@@ -1430,17 +1471,25 @@
 
   function renderTaskItem(job, version) {
     const moduleTasks = Array.isArray(job.module_tasks) ? job.module_tasks : [];
+    const status = job.status || "queued";
+    const badge = `<span class="task-badge ${escapeHTML(status)}">${escapeHTML(status)}</span>`;
     const sublist = moduleTasks.length ? `
       <div class="task-sublist">
-        ${moduleTasks.map(task => `
-          <div class="task-subitem ${escapeHTML(task.status || "queued")}">
+        ${moduleTasks.map(task => {
+          const taskStatus = task.status || "queued";
+          const stageLabel = task.stage_name || task.stage || "等待";
+          const stage = taskStatus === "failed"
+            ? `<button class="task-substage failed" type="button" data-retry-code="${escapeHTML(job.stock_code || "")}" data-retry-module="${escapeHTML(task.module || "")}" title="重新执行该股票分析">${escapeHTML(stageLabel)}</button>`
+            : `<span class="task-substage">${escapeHTML(stageLabel)}</span>`;
+          return `
+          <div class="task-subitem ${escapeHTML(taskStatus)}">
             <div class="task-subhead">
               <span class="task-submodule">${escapeHTML(moduleNameZh(task.module))}</span>
-              <span class="task-substage">${escapeHTML(task.stage_name || task.stage || "等待")}</span>
+              ${stage}
             </div>
             <div class="task-submsg">${escapeHTML(task.message || statusText(task.status))}</div>
           </div>
-        `).join("")}
+        `}).join("")}
       </div>
     ` : "";
     return `
@@ -1449,7 +1498,7 @@
         <div class="task-stock"><span>${escapeHTML(job.stock_code)}</span><span>${escapeHTML(job.force_refresh ? "刷新" : "缓存")}</span></div>
         <div class="task-meta">${escapeHTML(job.finished_at || job.started_at || job.created_at || "--")}</div>
         <div class="task-status">
-          <span class="task-badge ${escapeHTML(job.status || "queued")}">${escapeHTML(job.status || "queued")}</span>
+          ${badge}
           <div class="task-note">${escapeHTML(job.error || statusText(job.status))}</div>
         </div>
         ${sublist}
@@ -1475,6 +1524,7 @@
   }
 
   function renderEmpty(title, body) {
+    highlightCachedChip("");
     rBody.innerHTML = `
       <div class="empty">
         <div class="empty-title">${escapeHTML(title)}</div>
@@ -1484,9 +1534,15 @@
     result.classList.remove("hidden", "loading");
   }
 
+  function highlightCachedChip(stockCode) {
+    suggestions.querySelectorAll(".chip").forEach(chip => {
+      chip.classList.toggle("cache-active", Boolean(stockCode) && chip.dataset.code === stockCode);
+    });
+  }
+
   function renderChips(items) {
     suggestions.innerHTML = '<span class="suggest-label">已缓存：</span>' + items.map(item => `
-      <button class="chip" data-code="${escapeHTML(item.stock_code)}" type="button">
+      <button class="chip ${item.stock_code === currentCode ? "cache-active" : ""}" data-code="${escapeHTML(item.stock_code)}" type="button">
         ${escapeHTML(item.stock_code)}<span class="chip-name">${escapeHTML(item.stock_name || item.industry_name || "")}</span>
       </button>
     `).join("");
@@ -1536,6 +1592,7 @@
     }
 
     setBusy(true);
+    highlightCachedChip("");
     resetSteps();
     setStep(1, "done", `已接收 ${code}`);
     setStep(2, "active", "扫描 cache_manifest.json ...");
@@ -1544,8 +1601,8 @@
     try {
       const summary = await api(`/api/stocks/${code}/summary`);
       if (runId !== currentRun) return;
-      const moduleCount = Object.values(summary.modules || {}).filter(m => m.status === "success").length;
-      setStep(2, "done", `${moduleCount}/5 模块就绪`);
+      const moduleCount = Object.values(summary.modules || {}).filter(m => m.file_exists).length;
+      setStep(2, "done", `${moduleCount}/5 模块清洗就绪`);
       setStep(3, "done", "跳过 · 使用本地缓存");
       setStep(4, "done", "已返回结果");
       setMeta("缓存命中", "已读取本地 cleaned 数据 · 跳过抓取与模型调用");
@@ -1569,6 +1626,7 @@
 
   async function analyzeAndPoll(code) {
     const runId = ++currentRun;
+    let keepTaskPanel = false;
     code = String(code || "").trim();
     if (!/^\d{6}$/.test(code)) {
       await loadSummary(code);
@@ -1577,6 +1635,7 @@
 
     setBusy(true);
     showTaskPanel();
+    highlightCachedChip("");
     resetSteps();
     setStep(1, "done", `已接收 ${code}`);
     setStep(2, "done", "准备触发后端分析");
@@ -1593,6 +1652,7 @@
       if (finalJob.status !== "success") {
         throw new Error(finalJob.error || "分析任务失败");
       }
+      const hasFailedModule = (finalJob.module_tasks || []).some(task => task.status === "failed");
       setStep(3, "done", "后端分析完成");
       setStep(4, "active", "刷新摘要 ...");
       const summary = await api(`/api/stocks/${code}/summary`);
@@ -1600,15 +1660,59 @@
       setMeta("分析完成", "已刷新本地 cleaned 数据并生成摘要");
       renderResult(summary, { model: "本地摘要", cacheTag: "" });
       await loadStocks();
+      keepTaskPanel = hasFailedModule;
     } catch (error) {
       if (runId !== currentRun) return;
+      keepTaskPanel = true;
+      showTaskPanel();
       setStep(3, "error", "分析失败");
       setMeta("分析失败", error.message, "warn");
       renderEmpty("分析任务失败", error.message);
     } finally {
       if (runId === currentRun) {
         setBusy(false);
-        hideTaskPanel();
+        if (!keepTaskPanel) hideTaskPanel();
+      }
+    }
+  }
+
+  async function reanalyzeModule(moduleName) {
+    const runId = ++currentRun;
+    let keepTaskPanel = false;
+    const code = currentCode || input.value || rCode.textContent.slice(0, 6);
+    if (!/^\d{6}$/.test(code) || !moduleName) return;
+
+    setBusy(true);
+    showTaskPanel();
+    resetSteps();
+    setStep(1, "done", `已接收 ${code}`);
+    setStep(2, "done", `复用 ${moduleNameZh(moduleName)} cleaned 数据`);
+    setStep(3, "active", "等待大模型分析 ...");
+    setMeta("模块重跑", `正在重新执行 ${moduleNameZh(moduleName)} 的大模型分析 ...`);
+    try {
+      const job = await api(`/api/stocks/${code}/modules/${moduleName}/reanalyze`, { method: "POST" });
+      const finalJob = await pollJob(job.job_id, runId);
+      if (runId !== currentRun) return;
+      if (finalJob.status !== "success") {
+        throw new Error(finalJob.error || `${moduleNameZh(moduleName)} 分析失败`);
+      }
+      setStep(3, "done", "大模型分析完成");
+      setStep(4, "active", "刷新摘要 ...");
+      const summary = await api(`/api/stocks/${code}/summary`);
+      setStep(4, "done", "已返回结果");
+      setMeta("模块完成", `${moduleNameZh(moduleName)} 大模型分析已重新生成`);
+      renderResult(summary, { model: "本地摘要", cacheTag: summary.cache_hit ? "缓存命中" : "" });
+      await loadStocks();
+    } catch (error) {
+      if (runId !== currentRun) return;
+      keepTaskPanel = true;
+      setStep(3, "error", "模块分析失败");
+      setMeta("模块失败", error.message, "warn");
+      renderEmpty(`${moduleNameZh(moduleName)} 分析失败`, error.message);
+    } finally {
+      if (runId === currentRun) {
+        setBusy(false);
+        if (!keepTaskPanel) hideTaskPanel();
       }
     }
   }
@@ -1622,7 +1726,11 @@
         setStep(3, "active", "任务排队中 ...");
         setMeta("任务排队", `任务 ${job.job_id.slice(0, 8)} 等待执行 ...`);
       } else if (job.status === "running") {
-        setStep(3, "active", "抓取 / 清洗 / 分析中 ...");
+        const activeModule = (job.module_tasks || []).find(task => task.status === "running");
+        const activeStage = activeModule
+          ? `${moduleNameZh(activeModule.module)} · ${activeModule.message || activeModule.stage_name || "执行中"}`
+          : "抓取 / 清洗 / 分析中 ...";
+        setStep(3, "active", activeStage);
         setMeta("任务运行", `任务 ${job.job_id.slice(0, 8)} 正在执行 ...`);
       } else {
         return job;
@@ -1642,6 +1750,30 @@
 
   btnRerun.addEventListener("click", () => {
     analyzeAndPoll(input.value || currentCode || rCode.textContent.slice(0, 6));
+  });
+
+  taskList.addEventListener("click", event => {
+    const retryButton = event.target.closest("[data-retry-code]");
+    if (!retryButton) return;
+    const code = retryButton.dataset.retryCode;
+    const moduleName = retryButton.dataset.retryModule;
+    input.value = code;
+    setMeta("重新执行", `${moduleNameZh(moduleName)} 模块失败，正在重新执行 ${code} 的分析任务 ...`);
+    analyzeAndPoll(code);
+  });
+
+  moduleStatuses.addEventListener("click", event => {
+    const retryPill = event.target.closest("[data-module-retry]");
+    if (!retryPill) return;
+    reanalyzeModule(retryPill.dataset.moduleRetry);
+  });
+
+  moduleStatuses.addEventListener("keydown", event => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    const retryPill = event.target.closest("[data-module-retry]");
+    if (!retryPill) return;
+    event.preventDefault();
+    reanalyzeModule(retryPill.dataset.moduleRetry);
   });
 
   btnCopy.addEventListener("click", () => {

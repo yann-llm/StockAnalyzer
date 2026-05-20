@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from threading import Lock
 from typing import Any
 from uuid import uuid4
@@ -52,6 +53,129 @@ def submit_stock_analysis(stock_code: str, force_refresh: bool = False) -> dict[
     future = _executor.submit(_run_job, job_id, stock_code, force_refresh)
     future.add_done_callback(_capture_unhandled_error(job_id))
     return get_job(job_id)
+
+
+def submit_module_llm_analysis(stock_code: str, module_name: str) -> dict[str, Any]:
+    if module_name not in MODULE_NAMES:
+        raise ValueError(f"unsupported module: {module_name}")
+
+    job_id = uuid4().hex
+    now = now_text()
+    with _lock:
+        _jobs[job_id] = {
+            "job_id": job_id,
+            "stock_code": stock_code,
+            "force_refresh": False,
+            "module_name": module_name,
+            "job_type": "module_llm",
+            "summary": None,
+            "status": "queued",
+            "created_at": now,
+            "started_at": None,
+            "finished_at": None,
+            "error": None,
+            "result": None,
+            "module_tasks": initial_module_tasks(active_module=module_name),
+            "deduplicated": False,
+        }
+        prune_jobs_locked()
+
+    future = _executor.submit(_run_module_llm_job, job_id, stock_code, module_name)
+    future.add_done_callback(_capture_unhandled_error(job_id))
+    return get_job(job_id)
+
+
+def rerun_module_llm_analysis(stock_code: str, module_name: str, job_id: str | None = None) -> dict[str, Any]:
+    if module_name not in MODULE_NAMES:
+        raise ValueError(f"unsupported module: {module_name}")
+
+    from financial.financial_llm_analyzer import analyze_financial_reports
+    from industry.industry_llm_analyzer import analyze_industry
+    from main import (
+        cache_manifest_path,
+        now_local,
+        read_json,
+        run_llm_postprocess_with_progress,
+        save_module_analysis,
+        stock_data_dir,
+        write_json,
+    )
+    from notice_risk.notice_risk_llm_analyzer import analyze_notice_risk
+    from stockcomment.stockcomment_llm_analyzer import analyze_stockcomment
+    from valuation.valuation_llm_analyzer import analyze_valuation
+
+    analyzers = {
+        "stockcomment": analyze_stockcomment,
+        "financial": analyze_financial_reports,
+        "industry": analyze_industry,
+        "notice_risk": analyze_notice_risk,
+        "valuation": analyze_valuation,
+    }
+
+    manifest_file = cache_manifest_path(stock_code)
+    manifest = read_json(manifest_file)
+    modules = manifest.setdefault("modules", {})
+    module_info = modules.get(module_name)
+    if not isinstance(module_info, dict):
+        raise ValueError(f"module not recorded in manifest: {module_name}")
+
+    cleaned_file = module_info.get("cleaned_file")
+    if not cleaned_file:
+        raise ValueError(f"module has no cleaned file: {module_name}")
+
+    cleaned_payload = read_json(stock_data_dir(stock_code) / Path(cleaned_file))
+    cleaned_data = cleaned_payload.get("data", cleaned_payload)
+
+    try:
+        generated_at = now_local()
+        if job_id:
+            update_module_task(job_id, module_name, "llm", "running", "调用大模型分析")
+            analysis_result = run_llm_postprocess_with_progress(
+                cleaned_data,
+                lambda data: save_module_analysis(stock_code, module_name, generated_at, data, analyzers[module_name]),
+                lambda module, stage, status, message=None: update_module_task(job_id, module, stage, status, message),
+                module_name,
+            )
+        else:
+            analysis_result = save_module_analysis(
+                stock_code,
+                module_name,
+                generated_at,
+                cleaned_data,
+                analyzers[module_name],
+            )
+    except Exception as exc:  # noqa: BLE001 - persist the module-level retry failure for the UI.
+        if job_id:
+            update_module_task(job_id, module_name, "llm", "failed", str(exc))
+        module_info.update(
+            {
+                "status": "failed",
+                "analysis_status": "failed",
+                "analysis_error": str(exc),
+                "error": str(exc),
+            }
+        )
+        write_json(manifest_file, manifest)
+        raise
+
+    module_info.update(
+        {
+            "status": "success",
+            "analysis_status": "success",
+            "analysis_file": analysis_result.get("analysis_file"),
+            "analysis_error": None,
+            "error": None,
+        }
+    )
+    write_json(manifest_file, manifest)
+    if job_id:
+        update_module_task(job_id, module_name, "module", "success", "模块大模型分析完成")
+    return {
+        "stock_code": stock_code,
+        "module": module_name,
+        "status": "success",
+        **analysis_result,
+    }
 
 
 def get_job(job_id: str) -> dict[str, Any]:
@@ -108,6 +232,22 @@ def _run_job(job_id: str, stock_code: str, force_refresh: bool) -> None:
     update_job(job_id, status="success", finished_at=now_text(), result=result, summary=summary)
 
 
+def _run_module_llm_job(job_id: str, stock_code: str, module_name: str) -> None:
+    update_job(job_id, status="running", started_at=now_text())
+    try:
+        result = rerun_module_llm_analysis(stock_code, module_name, job_id=job_id)
+    except Exception as exc:  # noqa: BLE001 - expose module retry failure without crashing the API worker.
+        update_job(job_id, status="failed", finished_at=now_text(), error=str(exc))
+        return
+    summary = {
+        "stock_code": stock_code,
+        "status": result.get("status"),
+        "module": module_name,
+        "analysis_file": result.get("analysis_file"),
+    }
+    update_job(job_id, status="success", finished_at=now_text(), result=result, summary=summary)
+
+
 def _capture_unhandled_error(job_id: str):
     def callback(future: Future[Any]) -> None:
         exc = future.exception()
@@ -130,14 +270,14 @@ def snapshot_job(job: dict[str, Any]) -> dict[str, Any]:
     return snapshot
 
 
-def initial_module_tasks() -> list[dict[str, Any]]:
+def initial_module_tasks(active_module: str | None = None) -> list[dict[str, Any]]:
     return [
         {
             "module": module_name,
             "stage": "queued",
             "stage_name": "等待",
-            "status": "queued",
-            "message": "等待执行",
+            "status": "queued" if active_module is None or module_name == active_module else "skipped",
+            "message": "等待执行" if active_module is None or module_name == active_module else "本次不执行",
             "updated_at": None,
         }
         for module_name in MODULE_NAMES
