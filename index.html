@@ -352,6 +352,22 @@
     align-items: center;
     font-size: 12px;
     color: var(--fg-2);
+    border: 0;
+    background: transparent;
+    padding: 2px 0;
+    inline-size: 100%;
+    text-align: start;
+    font-family: inherit;
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+  }
+  .ability-row:hover,
+  .ability-row:focus-visible {
+    color: var(--accent);
+    outline: none;
+  }
+  .ability-row:focus-visible {
+    box-shadow: 0 0 0 3px var(--accent-soft);
   }
   .ability-meter {
     block-size: 5px;
@@ -796,6 +812,15 @@
   }
   .result-section + .result-section {
     margin-block-start: 28px;
+  }
+  .result-section {
+    scroll-margin-block-start: 76px;
+    border-radius: var(--radius);
+    transition: background .28s, box-shadow .28s;
+  }
+  .result-section.section-focus {
+    background: var(--accent-soft);
+    box-shadow: 0 0 0 12px var(--accent-soft);
   }
   .result-section h3 {
     font-size: 11px;
@@ -1606,12 +1631,28 @@
       ${labels}
     `;
     abilityList.innerHTML = scores.map(item => `
-      <div class="ability-row">
+      <button class="ability-row" type="button" data-ability-target="${escapeHTML(item.key)}" title="跳转到${escapeHTML(item.label)}模块">
         <span>${escapeHTML(item.label)}</span>
         <span class="ability-meter"><span class="ability-fill" style="inline-size: ${item.score}%;"></span></span>
         <span class="ability-value">${item.score.toFixed(item.score % 1 ? 1 : 0)}</span>
-      </div>
+      </button>
     `).join("");
+  }
+
+  function sectionKeyForAbility(key) {
+    return key === "notice_risk" ? "risk" : key;
+  }
+
+  function scrollToResultSection(key) {
+    const targetKey = sectionKeyForAbility(key);
+    const target = rBody.querySelector(`[data-section-key="${CSS.escape(targetKey)}"]`);
+    if (!target) return;
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+    target.classList.remove("section-focus");
+    window.setTimeout(() => {
+      target.classList.add("section-focus");
+      window.setTimeout(() => target.classList.remove("section-focus"), 1200);
+    }, 180);
   }
 
   async function api(path, options) {
@@ -1657,7 +1698,7 @@
           `).join("")
         : `<p>${escapeHTML(section.body)}</p>`;
       return `
-        <section class="result-section">
+        <section class="result-section" data-section-key="${escapeHTML(section.key || "")}">
           <h3>${escapeHTML(section.key || "SECTION").toUpperCase()} <span class="zh">${escapeHTML(section.title)}</span></h3>
           ${content}
         </section>
@@ -1992,6 +2033,12 @@
     if (!retryPill) return;
     event.preventDefault();
     reanalyzeModule(retryPill.dataset.moduleRetry);
+  });
+
+  abilityList.addEventListener("click", event => {
+    const item = event.target.closest("[data-ability-target]");
+    if (!item) return;
+    scrollToResultSection(item.dataset.abilityTarget);
   });
 
   btnCopy.addEventListener("click", () => {
