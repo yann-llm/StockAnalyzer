@@ -142,6 +142,7 @@ def build_stock_summary(stock_code: str) -> dict[str, Any]:
         "data_source": f"data/{code}/cleaned/",
         "modules": modules,
         "metrics": build_metrics(cleaned),
+        "ability_scores": build_ability_scores(cleaned, analysis),
         "risk_flags": collect_risk_flags(cleaned),
         "sections": build_sections(cleaned, analysis, stock_name, industry_name),
     }
@@ -210,6 +211,46 @@ def build_metrics(cleaned: dict[str, dict[str, Any]]) -> dict[str, Any]:
         "industry_score": dig(industry_data, "score_summary", "overall_score"),
         "stock_score": dig(stockcomment_data, "score_features", "evaluation", "total_score"),
     }
+
+
+def build_ability_scores(
+    cleaned: dict[str, dict[str, Any]],
+    analysis: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    dimensions = [
+        ("stockcomment", "千股千评", dig(cleaned.get("stockcomment"), "data", "score_features", "evaluation", "total_score")),
+        ("financial", "财务质量", None),
+        ("industry", "行业与资金", dig(cleaned.get("industry"), "data", "score_summary", "overall_score")),
+        ("valuation", "估值位置", None),
+        ("notice_risk", "风险安全", None),
+    ]
+    scores: list[dict[str, Any]] = []
+    for key, label, fallback in dimensions:
+        score = clamp_score(extract_analysis_score(analysis.get(key)) if analysis.get(key) else fallback)
+        scores.append({"key": key, "label": label, "score": score})
+    return scores
+
+
+def extract_analysis_score(payload: dict[str, Any] | None) -> Any:
+    analysis_payload = payload.get("analysis") if isinstance(payload, dict) else None
+    if not isinstance(analysis_payload, dict):
+        return None
+    return analysis_payload.get("综合评分")
+
+
+def clamp_score(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        match = re.search(r"-?\d+(?:\.\d+)?", value)
+        if not match:
+            return None
+        value = match.group(0)
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return None
+    return max(0, min(100, score))
 
 
 def build_sections(
