@@ -1,7 +1,0 @@
-requests>=2.32.0
-certifi>=2023.5.7
-openai>=1.100.0
-anthropic>=0.72.0
-playwright>=1.60.0
-fastapi>=0.115.0
-uvicorn[standard]>=0.30.0

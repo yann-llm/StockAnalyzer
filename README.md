@@ -44,8 +44,16 @@ data/                         本地缓存数据目录，默认不提交到 Git
 
 ## 安装依赖
 
+依赖统一在 `pyproject.toml` 中声明，安装命令：
+
 ```bash
-pip install -r requirements.txt
+pip install .
+```
+
+如果需要在本地以可编辑模式（editable install）调试源码，使用：
+
+```bash
+pip install -e .
 ```
 
 ## 配置大模型
