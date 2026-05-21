@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 import re
 from typing import Any
-from urllib.request import Request, urlopen
+from urllib.request import Request
 
+from eastmoney_http import eastmoney_urlopen
 from .industry_common import DEFAULT_TIMEOUT, EastmoneyIndustryCapitalFlowError, data_rows, date_only, datacenter_get, normalize_industry_code
 
 
@@ -28,7 +29,7 @@ def fetch_valuation_industry_mapping(stock_code: str | int, timeout: int = DEFAU
 
     request = Request(VALUATION_DETAIL_PAGE_URL.format(stock_code=code), headers={"User-Agent": "Mozilla/5.0"})
     try:
-        with urlopen(request, timeout=timeout) as response:
+        with eastmoney_urlopen(request, timeout=timeout) as response:
             html = response.read().decode("utf-8", errors="ignore")
     except Exception as exc:  # noqa: BLE001
         raise EastmoneyIndustryCapitalFlowError(f"failed to fetch valuation mapping for {code}: {exc}") from exc

@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 from typing import Any
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import Request
+
+from eastmoney_http import eastmoney_urlopen
 
 
 ANN_LIST_URL = "https://np-anotice-stock.eastmoney.com/api/security/ann"
@@ -32,7 +34,7 @@ class EastmoneyNoticeRiskError(RuntimeError):
 def _request_json(url: str, params: dict[str, Any], timeout: int) -> dict[str, Any]:
     request = Request(f"{url}?{urlencode(params)}", headers={"User-Agent": "Mozilla/5.0"})
     try:
-        with urlopen(request, timeout=timeout) as response:
+        with eastmoney_urlopen(request, timeout=timeout) as response:
             return json.loads(response.read().decode("utf-8"))
     except Exception as exc:  # noqa: BLE001
         raise EastmoneyNoticeRiskError(f"failed to fetch notice data: {exc}") from exc

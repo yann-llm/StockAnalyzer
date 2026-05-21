@@ -6,7 +6,9 @@ import json
 from datetime import date
 from typing import Any
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import Request
+
+from eastmoney_http import eastmoney_urlopen
 
 
 DATACENTER_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
@@ -312,7 +314,7 @@ def _hq_code(stock_code: str) -> str:
 
 def _read_json(url: str, timeout: int) -> dict[str, Any]:
     request = Request(url, headers={"User-Agent": "Mozilla/5.0", "Referer": "https://data.eastmoney.com/"})
-    with urlopen(request, timeout=timeout) as response:
+    with eastmoney_urlopen(request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
 
 

@@ -9,6 +9,8 @@ from typing import Any
 import requests
 from playwright.sync_api import sync_playwright
 
+from eastmoney_http import eastmoney_requests_get
+
 
 PUSH2_ULIST_URL = "https://push2.eastmoney.com/api/qt/ulist.np/get"
 PUSH2_CLIST_URL = "https://push2.eastmoney.com/api/qt/clist/get"
@@ -64,7 +66,7 @@ def request_json(url: str, params: dict[str, Any], timeout: int) -> dict[str, An
     last_exc: Exception | None = None
     for attempt in range(3):
         try:
-            response = requests.get(url, params=clean_params, headers=headers, timeout=timeout)
+            response = eastmoney_requests_get(url, params=clean_params, headers=headers, timeout=timeout)
             response.raise_for_status()
             return response.json()
         except Exception as exc:  # noqa: BLE001 - expose a compact domain error.

@@ -5,7 +5,9 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlencode
 from urllib.error import URLError
-from urllib.request import Request, urlopen
+from urllib.request import Request
+
+from eastmoney_http import eastmoney_urlopen
 
 
 FUND_F10_BASE_URL = "https://fundf10.eastmoney.com"
@@ -64,7 +66,7 @@ class EastmoneyEtfFundError(RuntimeError):
 def _fetch_html(url: str, timeout: int = DEFAULT_TIMEOUT) -> str:
     request = Request(url, headers=DEFAULT_HEADERS)
     try:
-        with urlopen(request, timeout=timeout) as response:
+        with eastmoney_urlopen(request, timeout=timeout) as response:
             return response.read().decode("utf-8", errors="ignore")
     except URLError as exc:
         raise EastmoneyEtfFundError(f"failed to fetch {url}: {exc}") from exc

@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 from typing import Any
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import Request
+
+from eastmoney_http import eastmoney_urlopen
 
 
 API_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
@@ -167,7 +169,7 @@ def _request_report(
     request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
 
     try:
-        with urlopen(request, timeout=timeout) as response:
+        with eastmoney_urlopen(request, timeout=timeout) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except Exception as exc:  # noqa: BLE001 - keep caller-facing error simple.
         raise EastmoneyFinancialError(f"failed to fetch {module_name}: {exc}") from exc

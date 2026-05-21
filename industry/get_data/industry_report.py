@@ -5,8 +5,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-import requests
-
+from eastmoney_http import eastmoney_requests_get
 from .industry_common import DEFAULT_HEADERS, DEFAULT_TIMEOUT, EastmoneyIndustryCapitalFlowError, normalize_industry_code
 
 
@@ -37,7 +36,7 @@ def fetch_industry_reports(industry_code: str | int, timeout: int = DEFAULT_TIME
         "qType": "1",
     }
     try:
-        response = requests.get(
+        response = eastmoney_requests_get(
             REPORT_LIST_URL,
             params=params,
             headers={

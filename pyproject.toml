@@ -5,6 +5,7 @@ description = "Eastmoney data fetchers and cleaners for stock and industry analy
 requires-python = ">=3.11"
 dependencies = [
     "requests>=2.32.0",
+    "certifi>=2023.5.7",
     "openai>=1.100.0",
     "anthropic>=0.72.0",
     "playwright>=1.60.0",
