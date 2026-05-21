@@ -16,7 +16,9 @@ _jobs: dict[str, dict[str, Any]] = {}
 _lock = Lock()
 MAX_JOBS = 50
 MODULE_NAMES = ("stockcomment", "financial", "industry", "notice_risk", "valuation")
-TASK_NAMES = (*MODULE_NAMES, "final_evaluation")
+ETF_MODULE_NAMES = ("etf_fund",)
+ALL_MODULE_NAMES = tuple(dict.fromkeys((*MODULE_NAMES, *ETF_MODULE_NAMES)))
+TASK_NAMES = (*ALL_MODULE_NAMES, "final_evaluation")
 STAGE_NAMES = {
     "cache": "缓存",
     "fetch": "抓取",
@@ -92,6 +94,7 @@ def rerun_module_llm_analysis(stock_code: str, module_name: str, job_id: str | N
 
     from financial.financial_llm_analyzer import analyze_financial_reports
     from industry.industry_llm_analyzer import analyze_industry
+    from etf_fund.etf_fund_llm_analyzer import analyze_etf_fund
     from main import (
         cache_manifest_path,
         now_local,
@@ -108,6 +111,7 @@ def rerun_module_llm_analysis(stock_code: str, module_name: str, job_id: str | N
 
     analyzers = {
         "stockcomment": analyze_stockcomment,
+        "etf_fund": analyze_etf_fund,
         "financial": analyze_financial_reports,
         "industry": analyze_industry,
         "notice_risk": analyze_notice_risk,
@@ -120,7 +124,7 @@ def rerun_module_llm_analysis(stock_code: str, module_name: str, job_id: str | N
 
     if module_name == "final_evaluation":
         generated_at = now_local()
-        for dependency_name in MODULE_NAMES:
+        for dependency_name in modules:
             dependency_info = modules.get(dependency_name)
             if not isinstance(dependency_info, dict):
                 raise ValueError(f"module not recorded in manifest: {dependency_name}")

@@ -8,6 +8,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from etf_fund import clean_etf_fund_data, fetch_etf_fund_data
+from etf_fund.etf_fund_llm_analyzer import analyze_etf_fund
 from financial import clean_financial_reports, fetch_financial_reports
 from industry import clean_industry_trend_data, fetch_industry_trend_data, fetch_valuation_industry_mapping
 from industry.industry_llm_analyzer import analyze_industry
@@ -19,6 +21,7 @@ from valuation import clean_valuation_data, fetch_valuation_data
 from valuation.valuation_llm_analyzer import analyze_valuation
 from final_evaluation_llm_analyzer import analyze_final_evaluation
 from financial.financial_llm_analyzer import analyze_financial_reports
+from security_profile import is_etf_profile, resolve_security_profile
 
 
 STOCK_CODE = "000157"
@@ -27,6 +30,7 @@ PROJECT_DIR = Path(__file__).resolve().parent
 DATA_DIR = PROJECT_DIR / "data"
 LOCAL_TZ = timezone(timedelta(hours=8))
 ANALYSIS_MODULES = ("stockcomment", "financial", "industry", "notice_risk", "valuation")
+ETF_ANALYSIS_MODULES = ("etf_fund",)
 LLM_PROGRESS_INTERVAL_SECONDS = 1
 MODULE_WORKERS = len(ANALYSIS_MODULES)
 
@@ -60,7 +64,11 @@ def cache_manifest_path(stock_code: str) -> Path:
     return stock_data_dir(stock_code) / "cache_manifest.json"
 
 
-def is_cache_usable(stock_code: str, current_time: datetime) -> bool:
+def expected_modules_for_profile(security_profile: dict[str, Any] | None) -> tuple[str, ...]:
+    return ETF_ANALYSIS_MODULES if is_etf_profile(security_profile) else ANALYSIS_MODULES
+
+
+def is_cache_usable(stock_code: str, current_time: datetime, security_profile: dict[str, Any] | None = None) -> bool:
     manifest_path = cache_manifest_path(stock_code)
     if not manifest_path.exists():
         return False
@@ -75,7 +83,7 @@ def is_cache_usable(stock_code: str, current_time: datetime) -> bool:
         return False
 
     modules = manifest.get("modules", {})
-    if sorted(modules) != sorted(EXPECTED_MODULES):
+    if sorted(modules) != sorted(expected_modules_for_profile(security_profile)):
         return False
 
     base_dir = stock_data_dir(stock_code)
@@ -284,7 +292,7 @@ def save_final_evaluation(
     try:
         notify_progress(progress, "final_evaluation", "llm", "running", "汇总五大模块结论")
         module_analyses = load_module_analyses(stock_code, module_results)
-        missing_modules = [module_name for module_name in ANALYSIS_MODULES if module_name not in module_analyses]
+        missing_modules = [module_name for module_name in module_results if module_name not in module_analyses]
         if missing_modules:
             raise ValueError(f"missing successful module analysis: {', '.join(missing_modules)}")
         if not module_analyses:
@@ -341,7 +349,30 @@ def module_specs(
     stock_code: str,
     generated_at: datetime,
     progress: Callable[[str, str, str, str | None], None] | None = None,
+    security_profile: dict[str, Any] | None = None,
 ) -> dict[str, Callable[[], dict[str, Any]]]:
+    profile = security_profile or resolve_security_profile(stock_code)
+    is_etf = is_etf_profile(profile)
+
+    if is_etf:
+        return {
+            "etf_fund": lambda: run_module(
+                stock_code,
+                "etf_fund",
+                generated_at,
+                lambda: fetch_etf_fund_data(stock_code),
+                clean_etf_fund_data,
+                postprocess=lambda cleaned_data: save_module_analysis(
+                    stock_code, "etf_fund", generated_at, cleaned_data, analyze_etf_fund
+                ),
+                progress=progress,
+            ),
+        }
+
+    financial_fetcher = lambda: fetch_financial_reports(stock_code, page_size=5)
+    industry_fetcher = lambda: fetch_industry_for_stock(stock_code)
+    valuation_fetcher = lambda: fetch_valuation_data(stock_code, detail_size=60)
+
     return {
         "stockcomment": lambda: run_module(
             stock_code,
@@ -358,7 +389,7 @@ def module_specs(
             stock_code,
             "financial",
             generated_at,
-            lambda: fetch_financial_reports(stock_code, page_size=5),
+            financial_fetcher,
             clean_financial_reports,
             postprocess=lambda cleaned_data: save_module_analysis(
                 stock_code, "financial", generated_at, cleaned_data, analyze_financial_reports
@@ -369,7 +400,7 @@ def module_specs(
             stock_code,
             "industry",
             generated_at,
-            lambda: fetch_industry_for_stock(stock_code),
+            industry_fetcher,
             clean_industry_for_stock,
             postprocess=lambda cleaned_data: save_module_analysis(
                 stock_code, "industry", generated_at, cleaned_data, analyze_industry
@@ -391,7 +422,7 @@ def module_specs(
             stock_code,
             "valuation",
             generated_at,
-            lambda: fetch_valuation_data(stock_code, detail_size=60),
+            valuation_fetcher,
             clean_valuation_data,
             postprocess=lambda cleaned_data: save_module_analysis(
                 stock_code, "valuation", generated_at, cleaned_data, analyze_valuation
@@ -405,8 +436,9 @@ def run_modules_parallel(
     stock_code: str,
     generated_at: datetime,
     progress: Callable[[str, str, str, str | None], None] | None = None,
+    security_profile: dict[str, Any] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    specs = module_specs(stock_code, generated_at, progress)
+    specs = module_specs(stock_code, generated_at, progress, security_profile)
     results: dict[str, dict[str, Any]] = {}
     with ThreadPoolExecutor(max_workers=MODULE_WORKERS) as executor:
         futures = {executor.submit(run): module_name for module_name, run in specs.items()}
@@ -420,7 +452,7 @@ def run_modules_parallel(
                     "status": "failed",
                     "error": str(exc),
                 }
-    return {module_name: results[module_name] for module_name in ANALYSIS_MODULES}
+    return {module_name: results[module_name] for module_name in specs}
 
 
 def run_stock_analysis(
@@ -429,18 +461,20 @@ def run_stock_analysis(
     progress: Callable[[str, str, str, str | None], None] | None = None,
 ) -> dict[str, Any]:
     generated_at = now_local()
-    if not force_refresh and is_cache_usable(stock_code, generated_at):
+    security_profile = resolve_security_profile(stock_code)
+    if not force_refresh and is_cache_usable(stock_code, generated_at, security_profile):
         print(f"[缓存] {stock_code} 最近 1 小时已有完整数据，复用已有文件。")
-        for module_name in ANALYSIS_MODULES:
+        for module_name in expected_modules_for_profile(security_profile):
             notify_progress(progress, module_name, "cache", "success", "复用缓存分析结果")
         return load_cached_result(stock_code)
 
-    module_results = run_modules_parallel(stock_code, generated_at, progress)
+    module_results = run_modules_parallel(stock_code, generated_at, progress, security_profile)
     final_evaluation = save_final_evaluation(stock_code, generated_at, module_results, progress)
 
     expires_at = generated_at + timedelta(seconds=CACHE_SECONDS)
     manifest = {
         "stock_code": stock_code,
+        "security_profile": security_profile,
         "generated_at": isoformat(generated_at),
         "expires_at": isoformat(expires_at),
         "cache_seconds": CACHE_SECONDS,
@@ -453,6 +487,7 @@ def run_stock_analysis(
     write_json(summary_path, manifest)
     return {
         "stock_code": stock_code,
+        "security_profile": security_profile,
         "status": "fetched",
         "cache_manifest": str(cache_manifest_path(stock_code)),
         "summary_file": str(summary_path),

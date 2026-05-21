@@ -12,7 +12,8 @@ from typing import Any
 PROJECT_DIR = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_DIR / "data"
 EXPECTED_MODULES = ("financial", "industry", "notice_risk", "stockcomment", "valuation")
-STATUS_MODULES = (*EXPECTED_MODULES, "final_evaluation")
+ETF_MODULES = ("etf_fund",)
+ALL_MODULES = tuple(dict.fromkeys((*EXPECTED_MODULES, *ETF_MODULES)))
 
 
 class DataStoreError(Exception):
@@ -111,6 +112,7 @@ def build_stocks_index() -> list[dict[str, Any]]:
 def build_stock_index_item(stock_code: str) -> dict[str, Any]:
     manifest = load_manifest(stock_code)
     modules = manifest.get("modules", {})
+    expected_modules = expected_modules_for_manifest(manifest)
     success_count = sum(1 for info in modules.values() if isinstance(info, dict) and info.get("status") == "success")
     item = {
         "stock_code": normalize_stock_code(stock_code),
@@ -118,7 +120,7 @@ def build_stock_index_item(stock_code: str) -> dict[str, Any]:
         "market_code": market_code(stock_code),
         "generated_at": manifest.get("generated_at"),
         "expires_at": manifest.get("expires_at"),
-        "modules_total": len(EXPECTED_MODULES),
+        "modules_total": len(expected_modules),
         "modules_success": success_count,
     }
     try:
@@ -167,7 +169,7 @@ def build_stock_summary(stock_code: str) -> dict[str, Any]:
 def build_module_statuses(stock_code: str, manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
     statuses: dict[str, dict[str, Any]] = {}
     manifest_modules = manifest.get("modules", {})
-    for module_name in STATUS_MODULES:
+    for module_name in (*expected_modules_for_manifest(manifest), "final_evaluation"):
         if module_name == "final_evaluation":
             info = manifest.get("final_evaluation", {})
             analysis_file = info.get("analysis_file") if isinstance(info, dict) else None
@@ -200,6 +202,16 @@ def build_module_statuses(stock_code: str, manifest: dict[str, Any]) -> dict[str
             "error": info.get("error") if isinstance(info, dict) else None,
         }
     return statuses
+
+
+def expected_modules_for_manifest(manifest: dict[str, Any]) -> tuple[str, ...]:
+    profile = manifest.get("security_profile") if isinstance(manifest, dict) else {}
+    if isinstance(profile, dict) and profile.get("security_type") == "etf":
+        return ETF_MODULES
+    manifest_modules = manifest.get("modules", {}) if isinstance(manifest, dict) else {}
+    if "etf_fund" in manifest_modules:
+        return ETF_MODULES
+    return EXPECTED_MODULES
 
 
 def load_successful_modules(stock_code: str, modules: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -250,13 +262,18 @@ def build_ability_scores(
     cleaned: dict[str, dict[str, Any]],
     analysis: dict[str, dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    dimensions = [
-        ("stockcomment", "千股千评", dig(cleaned.get("stockcomment"), "data", "score_features", "evaluation", "total_score")),
-        ("financial", "财务质量", None),
-        ("industry", "行业与资金", dig(cleaned.get("industry"), "data", "score_summary", "overall_score")),
-        ("valuation", "估值位置", None),
-        ("notice_risk", "风险安全", None),
-    ]
+    if cleaned.get("etf_fund"):
+        dimensions = [
+            ("etf_fund", "ETF基金", dig(cleaned.get("etf_fund"), "data", "overall_score")),
+        ]
+    else:
+        dimensions = [
+            ("stockcomment", "千股千评", dig(cleaned.get("stockcomment"), "data", "score_features", "evaluation", "total_score")),
+            ("financial", "财务质量", None),
+            ("industry", "行业与资金", dig(cleaned.get("industry"), "data", "score_summary", "overall_score")),
+            ("valuation", "估值位置", None),
+            ("notice_risk", "风险安全", None),
+        ]
     scores: list[dict[str, Any]] = []
     for key, label, fallback in dimensions:
         score = clamp_score(extract_analysis_score(analysis.get(key)) if analysis.get(key) else fallback)
@@ -293,13 +310,26 @@ def build_sections(
     stock_name: str,
     industry_name: str | None,
 ) -> list[dict[str, Any]]:
-    return [
+    sections = [
         {
             "key": "thesis",
             "title": "投资结论",
             "body": build_final_evaluation_text(final_evaluation) or build_thesis(cleaned, stock_name, industry_name),
             "items": build_final_evaluation_items(final_evaluation) or [],
         },
+    ]
+    if cleaned.get("etf_fund") or analysis.get("etf_fund"):
+        sections.append(
+            {
+                "key": "etf_fund",
+                "title": "ETF基金档案",
+                "body": build_llm_section_text(analysis.get("etf_fund")) or build_etf_fund_section(cleaned.get("etf_fund"))["body"],
+                "items": build_llm_section_items(analysis.get("etf_fund")) or build_etf_fund_section(cleaned.get("etf_fund"))["items"],
+            }
+        )
+    else:
+        sections.extend(
+            [
         {
             "key": "stockcomment",
             "title": "千股千评",
@@ -324,13 +354,18 @@ def build_sections(
             "body": build_llm_section_text(analysis.get("valuation")) or build_valuation_section(cleaned.get("valuation"))["body"],
             "items": build_llm_section_items(analysis.get("valuation")) or build_valuation_section(cleaned.get("valuation"))["items"],
         },
-        {
-            "key": "risk",
-            "title": "主要风险",
-            "body": build_llm_section_text(analysis.get("notice_risk")) or build_risk_section(cleaned)["body"],
-            "items": build_llm_section_items(analysis.get("notice_risk")) or build_risk_section(cleaned)["items"],
-        },
-    ]
+            ]
+        )
+    if not (cleaned.get("etf_fund") or analysis.get("etf_fund")):
+        sections.append(
+            {
+                "key": "risk",
+                "title": "主要风险",
+                "body": build_llm_section_text(analysis.get("notice_risk")) or build_risk_section(cleaned)["body"],
+                "items": build_llm_section_items(analysis.get("notice_risk")) or build_risk_section(cleaned)["items"],
+            }
+        )
+    return sections
 
 
 def build_llm_section_text(payload: dict[str, Any] | None) -> str | None:
@@ -572,6 +607,33 @@ def build_valuation_section(valuation: dict[str, Any] | None) -> dict[str, Any]:
         {"label": "判断依据", "value": "；".join(evidence_parts)},
     ]
     return {"body": "；".join(item["value"] for item in items if item.get("value")) + "。", "items": items}
+
+
+def build_etf_fund_section(etf_fund: dict[str, Any] | None) -> dict[str, Any]:
+    data = dig(etf_fund, "data") or {}
+    blocks = data.get("blocks") or {}
+    if not blocks:
+        return {"body": "ETF基金档案模块暂无可用摘要。", "items": []}
+    items: list[dict[str, str]] = []
+    if data.get("overall_score") is not None:
+        items.append({"label": "综合评分", "value": f"{format_number(data.get('overall_score'))} 分"})
+    for block in blocks.values():
+        if not isinstance(block, dict):
+            continue
+        name = block.get("name")
+        score = block.get("score")
+        notes = block.get("notes") or []
+        value_parts = []
+        if score is not None:
+            value_parts.append(f"{format_number(score)} 分")
+        if notes:
+            value_parts.append(str(notes[0]))
+        if name and value_parts:
+            items.append({"label": str(name), "value": "；".join(value_parts)})
+    return {
+        "body": "；".join(item["value"] for item in items if item.get("value")) + "。" if items else "ETF基金档案模块暂无可用摘要。",
+        "items": items,
+    }
 
 
 def build_risk_section(cleaned: dict[str, dict[str, Any]]) -> dict[str, Any]:
