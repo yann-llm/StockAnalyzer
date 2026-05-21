@@ -29,5 +29,6 @@ reviews/
 # Editor/OS files
 .idea/
 .vscode/
+.claude/
 .DS_Store
 Thumbs.db
