@@ -16,6 +16,7 @@ data/
 .env
 .env.*
 !.env.example
+llm_config.json
 
 # Tool caches
 .pytest_cache/

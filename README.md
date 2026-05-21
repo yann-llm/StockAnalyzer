@@ -6,7 +6,7 @@ StockAnalyzer 是一个基于东方财富公开数据的本地股票分析工作
 
 - 抓取东方财富个股数据，包括财务报表、行业数据、估值、公告风险和千股千评。
 - 对各模块数据进行清洗和结构化整理。
-- 使用 OpenAI SDK 调用兼容 OpenAI 接口的大模型，模型默认使用 `gpt-5.5`。
+- 可通过配置选择 OpenAI SDK 或 Anthropic SDK 调用大模型。
 - 每个子模块都有独立的大模型分析脚本，便于维护提示词。
 - 支持并行执行五个子模块分析，提高整体分析速度。
 - 提供 FastAPI 本地接口和静态 HTML 前端页面。
@@ -31,7 +31,7 @@ data/                 本地缓存数据目录，默认不提交到 Git
 
 - Python 3.11+
 - 可访问东方财富公开接口的网络环境
-- 可访问兼容 OpenAI SDK 的大模型服务
+- 可访问 OpenAI 兼容服务或 Anthropic API
 
 ## 安装依赖
 
@@ -39,9 +39,33 @@ data/                 本地缓存数据目录，默认不提交到 Git
 pip install -r requirements.txt
 ```
 
-## 配置环境变量
+## 配置大模型
 
-大模型调用读取以下环境变量：
+推荐复制 `llm_config.example.json` 为 `llm_config.json`，再按需选择 SDK：
+
+```json
+{
+  "provider": "anthropic",
+  "timeout": 300,
+  "max_retries": 0,
+  "providers": {
+    "anthropic": {
+      "model": "claude-sonnet-4-5",
+      "api_key": "你的 Anthropic API Key",
+      "base_url": null
+    }
+  }
+}
+```
+
+`provider` 可选：
+
+- `openai`：使用 OpenAI SDK，支持 OpenAI 官方或兼容 OpenAI Chat Completions 的服务。
+- `anthropic`：使用 Anthropic SDK，调用 Anthropic Messages API。
+
+`llm_config.json` 已加入 `.gitignore`，避免提交密钥。也可以通过 `LLM_CONFIG_PATH` 指定其他配置文件路径。
+
+仍然兼容原有环境变量：
 
 ```bash
 set MY_API_KEY=你的 API Key
@@ -53,6 +77,14 @@ PowerShell 示例：
 ```powershell
 $env:MY_API_KEY="你的 API Key"
 $env:MY_BASE_URL="你的 OpenAI 兼容接口地址"
+```
+
+Anthropic 环境变量示例：
+
+```powershell
+$env:LLM_PROVIDER="anthropic"
+$env:ANTHROPIC_API_KEY="你的 Anthropic API Key"
+$env:LLM_MODEL="claude-sonnet-4-5"
 ```
 
 ## 启动后端 API
