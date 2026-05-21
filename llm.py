@@ -248,3 +248,89 @@ def chat_text(
     completion = chat_completion(messages, model=model, **kwargs)
     message = completion.choices[0].message
     return message.content or ""
+
+
+def _strip_code_fence(text: str) -> str:
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return text
+    body = stripped[3:]
+    newline = body.find("\n")
+    if newline != -1 and body[:newline].strip().lower() in {"json", ""}:
+        body = body[newline + 1 :]
+    if body.rstrip().endswith("```"):
+        body = body.rstrip()[:-3]
+    return body
+
+
+def _repair_inline_quotes(text: str) -> str:
+    """Escape stray double quotes that appear inside JSON string values.
+
+    Walks the text as a JSON state machine. Inside a string, a `"` followed by
+    something other than JSON structural punctuation (`,`、`:`、`}`、`]` or EOF)
+    is treated as a content quote and escaped, which fixes the common LLM bug
+    of emitting `定位"偏弱可规避"` inside a value.
+    """
+    out: list[str] = []
+    n = len(text)
+    in_string = False
+    i = 0
+    while i < n:
+        c = text[i]
+        if not in_string:
+            out.append(c)
+            if c == '"':
+                in_string = True
+            i += 1
+            continue
+        if c == "\\":
+            out.append(c)
+            if i + 1 < n:
+                out.append(text[i + 1])
+                i += 2
+            else:
+                i += 1
+            continue
+        if c == '"':
+            j = i + 1
+            while j < n and text[j] in " \t\r\n":
+                j += 1
+            next_char = text[j] if j < n else ""
+            if next_char in {",", ":", "}", "]", ""}:
+                out.append(c)
+                in_string = False
+                i += 1
+            else:
+                out.append('\\"')
+                i += 1
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def parse_llm_json(content: str) -> dict[str, Any]:
+    """Parse LLM output that should be a JSON object, with tolerant fallbacks.
+
+    Falls back to `{"raw_text": content}` only when every recovery attempt
+    fails, matching the previous error contract callers expect.
+    """
+    if not content:
+        return {}
+    candidates = [content, _strip_code_fence(content)]
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+        return {"raw_value": parsed}
+    repaired = _repair_inline_quotes(_strip_code_fence(content))
+    try:
+        parsed = json.loads(repaired)
+    except json.JSONDecodeError:
+        return {"raw_text": content}
+    if isinstance(parsed, dict):
+        return parsed
+    return {"raw_value": parsed}

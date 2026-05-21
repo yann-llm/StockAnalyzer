@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from llm import DEFAULT_MODEL, chat_completion
+from llm import DEFAULT_MODEL, chat_completion, parse_llm_json
 
 MODEL_NAME = DEFAULT_MODEL
 
@@ -60,10 +60,7 @@ def analyze_notice_risk(cleaned: dict[str, Any]) -> dict[str, Any]:
         temperature=0.2,
     )
     content = response.choices[0].message.content or "{}"
-    try:
-        analysis = json.loads(content)
-    except json.JSONDecodeError:
-        analysis = {"raw_text": content}
+    analysis = parse_llm_json(content)
     return {
         "module": "notice_risk",
         "stock_code": cleaned.get("stock_code"),

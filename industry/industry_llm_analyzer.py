@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from llm import DEFAULT_MODEL, chat_completion
+from llm import DEFAULT_MODEL, chat_completion, parse_llm_json
 
 MODEL_NAME = DEFAULT_MODEL
 
@@ -48,7 +48,8 @@ def build_industry_analysis_messages(cleaned: dict[str, Any]) -> list[dict[str, 
         "`主要依据`和`风险提示`必须保留关键数据的原始值，例如分数、涨跌幅、资金净额、估值倍数或分位。"
         "`汇总要点`用于后续最终投资结论汇总，需围绕行业与资金环境写成一段或短句列表，"
         "保留关键原始数值，不要超过1000字。"
-        "字段值中可使用通用金融术语，但JSON键名必须全部使用上述中文键名。\n\n"
+        "字段值中可使用通用金融术语，但JSON键名必须全部使用上述中文键名。"
+        "JSON字符串值内部如需引用文本，请使用中文引号「」或单引号，不要使用未转义的英文双引号。\n\n"
         f"{json.dumps(context, ensure_ascii=False, indent=2)}"
     )
     return [
@@ -65,10 +66,7 @@ def analyze_industry(cleaned: dict[str, Any]) -> dict[str, Any]:
         temperature=0.2,
     )
     content = response.choices[0].message.content or "{}"
-    try:
-        analysis = json.loads(content)
-    except json.JSONDecodeError:
-        analysis = {"raw_text": content}
+    analysis = parse_llm_json(content)
     return {
         "module": "industry",
         "stock_code": cleaned.get("stock_code"),
