@@ -12,8 +12,21 @@ from typing import Any
 PROJECT_DIR = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_DIR / "data"
 EXPECTED_MODULES = ("financial", "industry", "notice_risk", "stockcomment", "valuation")
-ETF_MODULES = ("etf_fund",)
+ETF_MODULES = (
+    "etf_product_index",
+    "etf_return_performance",
+    "etf_risk_volatility",
+    "etf_holding_exposure",
+    "etf_scale_liquidity",
+)
 ALL_MODULES = tuple(dict.fromkeys((*EXPECTED_MODULES, *ETF_MODULES)))
+ETF_MODULE_LABELS = {
+    "etf_product_index": "产品与指数定位",
+    "etf_return_performance": "收益表现",
+    "etf_risk_volatility": "风险与波动",
+    "etf_holding_exposure": "持仓与行业暴露",
+    "etf_scale_liquidity": "规模与流动性",
+}
 
 
 class DataStoreError(Exception):
@@ -114,9 +127,10 @@ def build_stock_index_item(stock_code: str) -> dict[str, Any]:
     modules = manifest.get("modules", {})
     expected_modules = expected_modules_for_manifest(manifest)
     success_count = sum(1 for info in modules.values() if isinstance(info, dict) and info.get("status") == "success")
+    cleaned = load_successful_modules(normalize_stock_code(stock_code), build_module_statuses(stock_code, manifest))
     item = {
         "stock_code": normalize_stock_code(stock_code),
-        "stock_name": None,
+        "stock_name": resolve_display_name(normalize_stock_code(stock_code), cleaned),
         "market_code": market_code(stock_code),
         "generated_at": manifest.get("generated_at"),
         "expires_at": manifest.get("expires_at"),
@@ -125,7 +139,7 @@ def build_stock_index_item(stock_code: str) -> dict[str, Any]:
     }
     try:
         valuation = load_cleaned_module(stock_code, "valuation")
-        item["stock_name"] = dig(valuation, "data", "latest", "stock_name")
+        item["stock_name"] = dig(valuation, "data", "latest", "stock_name") or item["stock_name"]
         item["industry_name"] = dig(valuation, "data", "latest", "board_name")
     except DataStoreError:
         pass
@@ -142,7 +156,7 @@ def build_stock_summary(stock_code: str) -> dict[str, Any]:
 
     valuation_latest = dig(cleaned.get("valuation"), "data", "latest") or {}
     industry_data = dig(cleaned.get("industry"), "data") or {}
-    stock_name = valuation_latest.get("stock_name") or dig(industry_data, "stock_industry_mapping", "stock", "name") or code
+    stock_name = resolve_display_name(code, cleaned)
     industry_name = (
         valuation_latest.get("board_name")
         or industry_data.get("industry_name")
@@ -209,7 +223,7 @@ def expected_modules_for_manifest(manifest: dict[str, Any]) -> tuple[str, ...]:
     if isinstance(profile, dict) and profile.get("security_type") == "etf":
         return ETF_MODULES
     manifest_modules = manifest.get("modules", {}) if isinstance(manifest, dict) else {}
-    if "etf_fund" in manifest_modules:
+    if any(module_name in manifest_modules for module_name in ETF_MODULES) or "etf_fund" in manifest_modules:
         return ETF_MODULES
     return EXPECTED_MODULES
 
@@ -262,9 +276,10 @@ def build_ability_scores(
     cleaned: dict[str, dict[str, Any]],
     analysis: dict[str, dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    if cleaned.get("etf_fund"):
+    if has_etf_modules(cleaned, analysis):
         dimensions = [
-            ("etf_fund", "ETF基金", dig(cleaned.get("etf_fund"), "data", "overall_score")),
+            (module_name, label, dig(cleaned.get(module_name), "data", "score"))
+            for module_name, label in ETF_MODULE_LABELS.items()
         ]
     else:
         dimensions = [
@@ -318,15 +333,19 @@ def build_sections(
             "items": build_final_evaluation_items(final_evaluation) or [],
         },
     ]
-    if cleaned.get("etf_fund") or analysis.get("etf_fund"):
-        sections.append(
-            {
-                "key": "etf_fund",
-                "title": "ETF基金档案",
-                "body": build_llm_section_text(analysis.get("etf_fund")) or build_etf_fund_section(cleaned.get("etf_fund"))["body"],
-                "items": build_llm_section_items(analysis.get("etf_fund")) or build_etf_fund_section(cleaned.get("etf_fund"))["items"],
-            }
-        )
+    if has_etf_modules(cleaned, analysis):
+        for module_name, label in ETF_MODULE_LABELS.items():
+            if not cleaned.get(module_name) and not analysis.get(module_name):
+                continue
+            fallback = build_etf_fund_section(cleaned.get(module_name))
+            sections.append(
+                {
+                    "key": module_name,
+                    "title": label,
+                    "body": build_llm_section_text(analysis.get(module_name)) or fallback["body"],
+                    "items": build_llm_section_items(analysis.get(module_name)) or fallback["items"],
+                }
+            )
     else:
         sections.extend(
             [
@@ -356,7 +375,7 @@ def build_sections(
         },
             ]
         )
-    if not (cleaned.get("etf_fund") or analysis.get("etf_fund")):
+    if not has_etf_modules(cleaned, analysis):
         sections.append(
             {
                 "key": "risk",
@@ -366,6 +385,48 @@ def build_sections(
             }
         )
     return sections
+
+
+def has_etf_modules(cleaned: dict[str, dict[str, Any]], analysis: dict[str, dict[str, Any]]) -> bool:
+    return any(module_name in cleaned or module_name in analysis for module_name in ETF_MODULES) or "etf_fund" in cleaned or "etf_fund" in analysis
+
+
+def resolve_display_name(stock_code: str, cleaned: dict[str, dict[str, Any]]) -> str:
+    for module_name in ("etf_product_index", "etf_scale_liquidity", "etf_fund"):
+        legacy_name = extract_etf_name_from_pages(stock_code, dig(cleaned.get(module_name), "data", "pages"))
+        if legacy_name:
+            return legacy_name
+        fund_name = dig(cleaned.get(module_name), "data", "metrics", "fund_name")
+        if fund_name:
+            return str(fund_name)
+
+    valuation_latest = dig(cleaned.get("valuation"), "data", "latest") or {}
+    industry_data = dig(cleaned.get("industry"), "data") or {}
+    return (
+        valuation_latest.get("stock_name")
+        or dig(industry_data, "stock_industry_mapping", "stock", "name")
+        or stock_code
+    )
+
+
+def extract_etf_name_from_pages(stock_code: str, pages: Any) -> str | None:
+    if not isinstance(pages, dict):
+        return None
+    code = normalize_stock_code(stock_code)
+    for page in pages.values():
+        if not isinstance(page, dict):
+            continue
+        text = str(page.get("text_sample") or "")
+        match = re.search(rf"([\u4e00-\u9fa5A-Za-z0-9]+)\({re.escape(code)}\)", text)
+        if match:
+            return match.group(1)
+        match = re.search(rf"([\u4e00-\u9fa5A-Za-z0-9]+)\s*（{re.escape(code)}）", text)
+        if match:
+            return match.group(1)
+        match = re.search(r"基金简称\s+([\u4e00-\u9fa5A-Za-z0-9]+)", text)
+        if match:
+            return match.group(1)
+    return None
 
 
 def build_llm_section_text(payload: dict[str, Any] | None) -> str | None:
@@ -611,6 +672,25 @@ def build_valuation_section(valuation: dict[str, Any] | None) -> dict[str, Any]:
 
 def build_etf_fund_section(etf_fund: dict[str, Any] | None) -> dict[str, Any]:
     data = dig(etf_fund, "data") or {}
+    if data.get("block_key") or data.get("metrics"):
+        items: list[dict[str, str]] = []
+        if data.get("score") is not None:
+            items.append({"label": "综合评分", "value": f"{format_number(data.get('score'))} 分"})
+        notes = data.get("notes") or []
+        if notes:
+            items.append({"label": "结论", "value": str(notes[0])})
+        metrics = data.get("metrics") or {}
+        metric_text = summarize_etf_metrics(metrics)
+        if metric_text:
+            items.append({"label": "判断依据", "value": metric_text})
+        flags = data.get("risk_flags") or []
+        if flags:
+            items.append({"label": "风险提示", "value": "；".join(flag.get("title", "") for flag in flags[:3] if isinstance(flag, dict))})
+        return {
+            "body": "；".join(item["value"] for item in items if item.get("value")) + "。" if items else "ETF子模块暂无可用摘要。",
+            "items": items,
+        }
+
     blocks = data.get("blocks") or {}
     if not blocks:
         return {"body": "ETF基金档案模块暂无可用摘要。", "items": []}
@@ -634,6 +714,40 @@ def build_etf_fund_section(etf_fund: dict[str, Any] | None) -> dict[str, Any]:
         "body": "；".join(item["value"] for item in items if item.get("value")) + "。" if items else "ETF基金档案模块暂无可用摘要。",
         "items": items,
     }
+
+
+def summarize_etf_metrics(metrics: dict[str, Any]) -> str:
+    parts: list[str] = []
+    if metrics.get("tracking_index"):
+        parts.append(f"跟踪标的 {metrics.get('tracking_index')}")
+    if metrics.get("fund_type"):
+        parts.append(f"基金类型 {metrics.get('fund_type')}")
+    if metrics.get("fund_size"):
+        parts.append(f"规模 {metrics.get('fund_size')}")
+    stage_rows = metrics.get("stage_return_rows") or []
+    if len(stage_rows) > 1:
+        parts.append("阶段涨幅 " + " / ".join(" ".join(row[:2]) for row in stage_rows[1:4] if isinstance(row, list)))
+    nav_rows = metrics.get("latest_nav_rows") or []
+    if nav_rows and isinstance(nav_rows[0], dict):
+        first = nav_rows[0]
+        parts.append(f"最新净值 {first.get('DWJZ')}，日增长率 {first.get('JZZZL')}%")
+    holding_rows = metrics.get("top_holding_rows") or []
+    if len(holding_rows) > 1:
+        parts.append("第一大持仓 " + " ".join(holding_rows[1][1:4]))
+    industry_rows = metrics.get("industry_allocation_rows") or []
+    if industry_rows and isinstance(industry_rows[0], dict):
+        first = industry_rows[0]
+        parts.append(f"第一大行业 {first.get('industry')} {first.get('net_asset_ratio')}")
+    asset_rows = metrics.get("asset_allocation_rows") or []
+    if asset_rows and isinstance(asset_rows[-1], dict):
+        last = asset_rows[-1]
+        parts.append(f"股票仓位 {last.get('stock_ratio')}%")
+    scale_rows = metrics.get("scale_change_rows") or []
+    if len(scale_rows) > 1:
+        parts.append(f"期末净资产 {scale_rows[1][4]} 亿元")
+    if metrics.get("large_down_days_sample") is not None:
+        parts.append(f"样本大跌日 {metrics.get('large_down_days_sample')} 天")
+    return "；".join(str(part) for part in parts if part)[:500]
 
 
 def build_risk_section(cleaned: dict[str, dict[str, Any]]) -> dict[str, Any]:

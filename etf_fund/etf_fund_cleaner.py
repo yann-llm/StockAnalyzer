@@ -17,6 +17,14 @@ BLOCK_WEIGHTS = {
     "scale_liquidity": 0.15,
 }
 
+ETF_BLOCK_MODULES = {
+    "etf_product_index": "product_index",
+    "etf_return_performance": "return_performance",
+    "etf_risk_volatility": "risk_volatility",
+    "etf_holding_exposure": "holding_exposure",
+    "etf_scale_liquidity": "scale_liquidity",
+}
+
 
 class _TableParser(HTMLParser):
     def __init__(self) -> None:
@@ -96,6 +104,27 @@ def _strip_html(html: str) -> str:
     return _normalize_text(text)
 
 
+def _page_title(html: str) -> str | None:
+    match = re.search(r"<title[^>]*>([\s\S]*?)</title>", html or "", flags=re.I)
+    if not match:
+        return None
+    title = _normalize_text(_strip_html(match.group(1)))
+    return title or None
+
+
+def _fund_name_from_title(title: str | None) -> str | None:
+    if not title:
+        return None
+    match = re.match(r"(.+?)\(\d{6}\)", title)
+    if match:
+        return _normalize_text(match.group(1))
+    for separator in ("基金基本概况", "基金净值", "阶段涨幅", "_", "-"):
+        if separator in title:
+            candidate = title.split(separator, 1)[0]
+            return _normalize_text(candidate)
+    return title
+
+
 def _tables(html: str) -> list[list[list[str]]]:
     parser = _TableParser()
     parser.feed(html or "")
@@ -163,6 +192,7 @@ def _compact_page(module: dict[str, Any]) -> dict[str, Any]:
         "available": bool(tables or dataset_text or _strip_html(html)),
         "tables": tables[:8],
         "pairs": _all_pairs(tables),
+        "title": _page_title(html),
         "text_sample": _strip_html(parsed_html)[:1200],
     }
 
@@ -237,7 +267,8 @@ def _profile_block(profile: dict[str, Any]) -> dict[str, Any]:
         "score": _clamp(score),
         "source_pages": ["基本概况"],
         "metrics": {
-            "fund_name": pairs.get("基金全称") or pairs.get("基金简称"),
+            "fund_name": pairs.get("基金简称") or _fund_name_from_title(profile.get("title")) or pairs.get("基金全称"),
+            "fund_full_name": pairs.get("基金全称"),
             "fund_type": pairs.get("基金类型"),
             "tracking_index": pairs.get("跟踪标的") or pairs.get("业绩比较基准"),
             "manager": pairs.get("基金管理人"),
@@ -358,6 +389,7 @@ def _scale_block(profile: dict[str, Any], scale_change: dict[str, Any]) -> dict[
         "score": _clamp(score),
         "source_pages": ["规模变动", "基本概况"],
         "metrics": {
+            "fund_name": pairs.get("基金简称") or _fund_name_from_title(profile.get("title")) or pairs.get("基金全称"),
             "fund_size": pairs.get("基金规模") or pairs.get("最新规模") or latest_net_asset,
             "scale_change_rows": rows,
         },
@@ -423,6 +455,25 @@ def _overall_score(blocks: dict[str, dict[str, Any]]) -> int:
     return _clamp(total)
 
 
+def _pages_from_data(etf_data: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    modules = etf_data.get("modules", {})
+    return {key: _compact_page(module) for key, module in modules.items()}
+
+
+def _build_blocks(pages: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {
+        "product_index": _profile_block(pages.get("profile", {})),
+        "return_performance": _return_block(pages.get("nav_history", {}), pages.get("stage_return", {})),
+        "risk_volatility": _risk_block(pages.get("nav_history", {}), pages.get("stage_return", {})),
+        "holding_exposure": _holding_block(
+            pages.get("holdings", {}),
+            pages.get("industry_allocation", {}),
+            pages.get("asset_allocation", {}),
+        ),
+        "scale_liquidity": _scale_block(pages.get("profile", {}), pages.get("scale_change", {})),
+    }
+
+
 def _risk_flags(blocks: dict[str, dict[str, Any]]) -> list[dict[str, str]]:
     flags: list[dict[str, str]] = []
     scale = blocks["scale_liquidity"]["metrics"].get("fund_size")
@@ -437,19 +488,8 @@ def _risk_flags(blocks: dict[str, dict[str, Any]]) -> list[dict[str, str]]:
 
 def clean_etf_fund_data(etf_data: dict[str, Any]) -> dict[str, Any]:
     """Clean seven Fund F10 archive pages into five ETF score blocks."""
-    modules = etf_data.get("modules", {})
-    pages = {key: _compact_page(module) for key, module in modules.items()}
-    blocks = {
-        "product_index": _profile_block(pages.get("profile", {})),
-        "return_performance": _return_block(pages.get("nav_history", {}), pages.get("stage_return", {})),
-        "risk_volatility": _risk_block(pages.get("nav_history", {}), pages.get("stage_return", {})),
-        "holding_exposure": _holding_block(
-            pages.get("holdings", {}),
-            pages.get("industry_allocation", {}),
-            pages.get("asset_allocation", {}),
-        ),
-        "scale_liquidity": _scale_block(pages.get("profile", {}), pages.get("scale_change", {})),
-    }
+    pages = _pages_from_data(etf_data)
+    blocks = _build_blocks(pages)
     return {
         "stock_code": etf_data.get("stock_code"),
         "source": etf_data.get("source", "eastmoney_fundf10"),
@@ -468,3 +508,54 @@ def clean_etf_fund_data(etf_data: dict[str, Any]) -> dict[str, Any]:
             for key, page in pages.items()
         },
     }
+
+
+def clean_etf_fund_module_data(etf_data: dict[str, Any]) -> dict[str, Any]:
+    """Clean one ETF module payload into one score block."""
+    module_name = etf_data.get("module")
+    block_key = ETF_BLOCK_MODULES.get(str(module_name))
+    if not block_key:
+        raise ValueError(f"unsupported ETF fund module: {module_name}")
+    pages = _pages_from_data(etf_data)
+    block = _build_blocks(pages)[block_key]
+    cleaned = {
+        "stock_code": etf_data.get("stock_code"),
+        "module": module_name,
+        "source": etf_data.get("source", "eastmoney_fundf10"),
+        "security_type": "etf",
+        "block_key": block_key,
+        "name": block.get("name"),
+        "weight": block.get("weight"),
+        "score": block.get("score"),
+        "source_pages": block.get("source_pages") or [],
+        "metrics": block.get("metrics") or {},
+        "notes": block.get("notes") or [],
+        "risk_flags": _module_risk_flags(block_key, block),
+        "pages": {
+            key: {
+                "page_name": page.get("page_name"),
+                "url": page.get("url"),
+                "available": page.get("available"),
+                "text_sample": page.get("text_sample"),
+            }
+            for key, page in pages.items()
+        },
+    }
+    return cleaned
+
+
+def _module_risk_flags(block_key: str, block: dict[str, Any]) -> list[dict[str, str]]:
+    flags: list[dict[str, str]] = []
+    metrics = block.get("metrics") or {}
+    if block_key == "scale_liquidity":
+        scale = metrics.get("fund_size")
+        if scale and (_number(scale) or 0) < 1:
+            flags.append({"level": "warning", "title": "基金规模偏小", "detail": f"基金规模为 {scale}。"})
+        flags.append({"level": "notice", "title": "ETF 交易数据待补充", "detail": "规模板块当前尚未纳入场内成交额、折溢价率和盘口深度。"})
+    if block_key == "holding_exposure":
+        top_weight_sum = metrics.get("top_weight_sum_sample")
+        if top_weight_sum is not None and top_weight_sum >= 75:
+            flags.append({"level": "notice", "title": "持仓集中度较高", "detail": f"样本前十大权重合计约 {top_weight_sum}%。"})
+    if block_key == "risk_volatility":
+        flags.append({"level": "notice", "title": "波动测算待扩展", "detail": "风险板块当前使用近期净值样本，后续应补最大回撤和年化波动。"})
+    return flags

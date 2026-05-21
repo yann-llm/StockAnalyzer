@@ -9,6 +9,8 @@ from threading import Lock
 from typing import Any
 from uuid import uuid4
 
+from security_profile import is_etf_profile, resolve_security_profile
+
 LOCAL_TZ = timezone(timedelta(hours=8))
 
 _executor = ThreadPoolExecutor(max_workers=1)
@@ -16,7 +18,13 @@ _jobs: dict[str, dict[str, Any]] = {}
 _lock = Lock()
 MAX_JOBS = 50
 MODULE_NAMES = ("stockcomment", "financial", "industry", "notice_risk", "valuation")
-ETF_MODULE_NAMES = ("etf_fund",)
+ETF_MODULE_NAMES = (
+    "etf_product_index",
+    "etf_return_performance",
+    "etf_risk_volatility",
+    "etf_holding_exposure",
+    "etf_scale_liquidity",
+)
 ALL_MODULE_NAMES = tuple(dict.fromkeys((*MODULE_NAMES, *ETF_MODULE_NAMES)))
 TASK_NAMES = (*ALL_MODULE_NAMES, "final_evaluation")
 STAGE_NAMES = {
@@ -48,7 +56,7 @@ def submit_stock_analysis(stock_code: str, force_refresh: bool = False) -> dict[
             "finished_at": None,
             "error": None,
             "result": None,
-            "module_tasks": initial_module_tasks(),
+            "module_tasks": initial_module_tasks(stock_code=stock_code),
             "deduplicated": False,
         }
         prune_jobs_locked()
@@ -61,6 +69,8 @@ def submit_stock_analysis(stock_code: str, force_refresh: bool = False) -> dict[
 def submit_module_llm_analysis(stock_code: str, module_name: str) -> dict[str, Any]:
     if module_name not in TASK_NAMES:
         raise ValueError(f"unsupported module: {module_name}")
+    if module_name not in task_names_for_stock(stock_code):
+        raise ValueError(f"module {module_name} is not available for {resolve_security_profile(stock_code).get('security_type')}")
 
     job_id = uuid4().hex
     now = now_text()
@@ -78,7 +88,7 @@ def submit_module_llm_analysis(stock_code: str, module_name: str) -> dict[str, A
             "finished_at": None,
             "error": None,
             "result": None,
-            "module_tasks": initial_module_tasks(active_module=module_name),
+            "module_tasks": initial_module_tasks(active_module=module_name, stock_code=stock_code),
             "deduplicated": False,
         }
         prune_jobs_locked()
@@ -91,10 +101,13 @@ def submit_module_llm_analysis(stock_code: str, module_name: str) -> dict[str, A
 def rerun_module_llm_analysis(stock_code: str, module_name: str, job_id: str | None = None) -> dict[str, Any]:
     if module_name not in TASK_NAMES:
         raise ValueError(f"unsupported module: {module_name}")
+    task_names = task_names_for_stock(stock_code)
+    if module_name not in task_names:
+        raise ValueError(f"module {module_name} is not available for {resolve_security_profile(stock_code).get('security_type')}")
 
     from financial.financial_llm_analyzer import analyze_financial_reports
     from industry.industry_llm_analyzer import analyze_industry
-    from etf_fund.etf_fund_llm_analyzer import analyze_etf_fund
+    from etf_fund.etf_fund_llm_analyzer import analyze_etf_fund_module
     from main import (
         cache_manifest_path,
         now_local,
@@ -111,7 +124,11 @@ def rerun_module_llm_analysis(stock_code: str, module_name: str, job_id: str | N
 
     analyzers = {
         "stockcomment": analyze_stockcomment,
-        "etf_fund": analyze_etf_fund,
+        "etf_product_index": analyze_etf_fund_module,
+        "etf_return_performance": analyze_etf_fund_module,
+        "etf_risk_volatility": analyze_etf_fund_module,
+        "etf_holding_exposure": analyze_etf_fund_module,
+        "etf_scale_liquidity": analyze_etf_fund_module,
         "financial": analyze_financial_reports,
         "industry": analyze_industry,
         "notice_risk": analyze_notice_risk,
@@ -124,7 +141,8 @@ def rerun_module_llm_analysis(stock_code: str, module_name: str, job_id: str | N
 
     if module_name == "final_evaluation":
         generated_at = now_local()
-        for dependency_name in modules:
+        dependency_names = [name for name in task_names if name != "final_evaluation" and name in modules]
+        for dependency_name in dependency_names:
             dependency_info = modules.get(dependency_name)
             if not isinstance(dependency_info, dict):
                 raise ValueError(f"module not recorded in manifest: {dependency_name}")
@@ -179,7 +197,7 @@ def rerun_module_llm_analysis(stock_code: str, module_name: str, job_id: str | N
         manifest["final_evaluation"] = save_final_evaluation(
             stock_code,
             generated_at,
-            modules,
+            {name: modules[name] for name in dependency_names},
             (lambda module, stage, status, message=None: update_module_task(job_id, module, stage, status, message))
             if job_id
             else None,
@@ -363,7 +381,14 @@ def snapshot_job(job: dict[str, Any]) -> dict[str, Any]:
     return snapshot
 
 
-def initial_module_tasks(active_module: str | None = None) -> list[dict[str, Any]]:
+def task_names_for_stock(stock_code: str | None = None) -> tuple[str, ...]:
+    if stock_code and is_etf_profile(resolve_security_profile(stock_code)):
+        return (*ETF_MODULE_NAMES, "final_evaluation")
+    return (*MODULE_NAMES, "final_evaluation")
+
+
+def initial_module_tasks(active_module: str | None = None, stock_code: str | None = None) -> list[dict[str, Any]]:
+    task_names = list(task_names_for_stock(stock_code))
     return [
         {
             "module": module_name,
@@ -373,7 +398,7 @@ def initial_module_tasks(active_module: str | None = None) -> list[dict[str, Any
             "message": "等待执行" if active_module is None or module_name == active_module else "本次不执行",
             "updated_at": None,
         }
-        for module_name in TASK_NAMES
+        for module_name in task_names
     ]
 
 
@@ -388,7 +413,7 @@ def update_module_task(
         job = _jobs.get(job_id)
         if not job:
             return
-        tasks = job.setdefault("module_tasks", initial_module_tasks())
+        tasks = job.setdefault("module_tasks", initial_module_tasks(stock_code=job.get("stock_code")))
         task = next((item for item in tasks if item.get("module") == module_name), None)
         if task is None:
             task = {"module": module_name}

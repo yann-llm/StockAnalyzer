@@ -8,8 +8,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from etf_fund import clean_etf_fund_data, fetch_etf_fund_data
-from etf_fund.etf_fund_llm_analyzer import analyze_etf_fund
+from etf_fund import clean_etf_fund_module_data, fetch_etf_fund_module_data
+from etf_fund.etf_fund_llm_analyzer import analyze_etf_fund_module
 from financial import clean_financial_reports, fetch_financial_reports
 from industry import clean_industry_trend_data, fetch_industry_trend_data, fetch_valuation_industry_mapping
 from industry.industry_llm_analyzer import analyze_industry
@@ -30,7 +30,13 @@ PROJECT_DIR = Path(__file__).resolve().parent
 DATA_DIR = PROJECT_DIR / "data"
 LOCAL_TZ = timezone(timedelta(hours=8))
 ANALYSIS_MODULES = ("stockcomment", "financial", "industry", "notice_risk", "valuation")
-ETF_ANALYSIS_MODULES = ("etf_fund",)
+ETF_ANALYSIS_MODULES = (
+    "etf_product_index",
+    "etf_return_performance",
+    "etf_risk_volatility",
+    "etf_holding_exposure",
+    "etf_scale_liquidity",
+)
 LLM_PROGRESS_INTERVAL_SECONDS = 1
 MODULE_WORKERS = len(ANALYSIS_MODULES)
 
@@ -356,17 +362,18 @@ def module_specs(
 
     if is_etf:
         return {
-            "etf_fund": lambda: run_module(
+            module_name: lambda module_name=module_name: run_module(
                 stock_code,
-                "etf_fund",
+                module_name,
                 generated_at,
-                lambda: fetch_etf_fund_data(stock_code),
-                clean_etf_fund_data,
+                lambda module_name=module_name: fetch_etf_fund_module_data(stock_code, module_name),
+                clean_etf_fund_module_data,
                 postprocess=lambda cleaned_data: save_module_analysis(
-                    stock_code, "etf_fund", generated_at, cleaned_data, analyze_etf_fund
+                    stock_code, str(cleaned_data.get("module")), generated_at, cleaned_data, analyze_etf_fund_module
                 ),
                 progress=progress,
-            ),
+            )
+            for module_name in ETF_ANALYSIS_MODULES
         }
 
     financial_fetcher = lambda: fetch_financial_reports(stock_code, page_size=5)

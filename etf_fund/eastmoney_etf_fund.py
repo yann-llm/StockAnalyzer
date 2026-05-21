@@ -48,6 +48,14 @@ FUND_ARCHIVE_DATASETS = {
     },
 }
 
+ETF_FUND_MODULE_PAGES = {
+    "etf_product_index": ("profile",),
+    "etf_return_performance": ("nav_history", "stage_return"),
+    "etf_risk_volatility": ("nav_history", "stage_return"),
+    "etf_holding_exposure": ("holdings", "industry_allocation", "asset_allocation"),
+    "etf_scale_liquidity": ("profile", "scale_change"),
+}
+
 
 class EastmoneyEtfFundError(RuntimeError):
     """Raised when Eastmoney ETF fund archive data cannot be fetched."""
@@ -104,5 +112,26 @@ def fetch_etf_fund_data(stock_code: str | int, timeout: int = DEFAULT_TIMEOUT) -
         "modules": {
             page_key: fetch_fund_archive_page(code, page_key, timeout)
             for page_key in FUND_ARCHIVE_PAGES
+        },
+    }
+
+
+def fetch_etf_fund_module_data(
+    stock_code: str | int,
+    module_name: str,
+    timeout: int = DEFAULT_TIMEOUT,
+) -> dict[str, Any]:
+    """Fetch only the Fund F10 pages needed by one ETF analysis module."""
+    code = str(stock_code).strip()
+    page_keys = ETF_FUND_MODULE_PAGES.get(module_name)
+    if not page_keys:
+        raise ValueError(f"unsupported ETF fund module: {module_name}")
+    return {
+        "stock_code": code,
+        "module": module_name,
+        "source": "eastmoney_fundf10",
+        "modules": {
+            page_key: fetch_fund_archive_page(code, page_key, timeout)
+            for page_key in page_keys
         },
     }

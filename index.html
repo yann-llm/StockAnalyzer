@@ -1422,7 +1422,7 @@
 
     // No cache → fetch
     subs[1].textContent = "未找到缓存 · 正在抓取并清洗 5 个模块";
-    setMeta("新抓取", "正在抓取并清洗数据 · financial / industry / valuation / notice_risk / stockcomment");
+    setMeta("新抓取", "正在抓取并清洗当前标的的 5 个分析模块");
 
     await delay(1100);
     if (runId !== currentRun) return;
@@ -1747,7 +1747,7 @@
           const taskStatus = task.status || "queued";
           const stageLabel = task.stage_name || task.stage || "等待";
           const stage = taskStatus === "failed"
-            ? `<button class="task-substage failed" type="button" data-retry-code="${escapeHTML(job.stock_code || "")}" data-retry-module="${escapeHTML(task.module || "")}" title="重新执行该股票分析">${escapeHTML(stageLabel)}</button>`
+            ? `<button class="task-substage failed" type="button" data-retry-code="${escapeHTML(job.stock_code || "")}" data-retry-module="${escapeHTML(task.module || "")}" title="重新执行该模块分析">${escapeHTML(stageLabel)}</button>`
             : `<span class="task-substage">${escapeHTML(stageLabel)}</span>`;
           return `
           <div class="task-subitem ${escapeHTML(taskStatus)}">
@@ -1785,6 +1785,11 @@
     return {
       stockcomment: "千股千评",
       etf_fund: "ETF基金",
+      etf_product_index: "产品指数",
+      etf_return_performance: "收益表现",
+      etf_risk_volatility: "风险波动",
+      etf_holding_exposure: "持仓暴露",
+      etf_scale_liquidity: "规模流动",
       financial: "财务",
       industry: "行业",
       notice_risk: "公告",
@@ -1928,7 +1933,7 @@
     try {
       const job = await api(`/api/stocks/${code}/analyze?force=true`, { method: "POST" });
       if (job.deduplicated) {
-        setMeta("任务复用", "该股票已有分析任务正在运行，已接入现有任务进度 ...");
+        setMeta("任务复用", "该标的已有分析任务正在运行，已接入现有任务进度 ...");
       }
       const finalJob = await pollJob(job.job_id, runId);
       if (runId !== currentRun) return;
