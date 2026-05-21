@@ -47,7 +47,9 @@ def build_valuation_analysis_messages(cleaned: dict[str, Any]) -> list[dict[str,
         "`主要依据`和`风险提示`必须保留关键数据的原始值，例如PE、PB、PEG、PCF、PS、排名或分位。"
         "`汇总要点`用于后续最终投资结论汇总，需围绕估值性价比写成一段或短句列表，"
         "保留关键原始数值，不要超过1000字。"
-        "字段值中可使用通用金融术语，但JSON键名必须全部使用上述中文键名。\n\n"
+        "字段值中可使用通用金融术语，但JSON键名必须全部使用上述中文键名。"
+        "涉及金融专业术语（英文缩写或指标名）时，每次出现都必须在术语后用半角括号附中文解释，"
+        "例如`PE_TTM(滚动市盈率)`、`PB(市净率)`、`PS(市销率)`、`PEG(市盈率相对盈利增长比率)`、`PCF(市现率)`；中文术语无需重复解释。\n\n"
         f"{json.dumps(context, ensure_ascii=False, indent=2)}"
     )
     return [
