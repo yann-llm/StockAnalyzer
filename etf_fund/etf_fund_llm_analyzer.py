@@ -132,7 +132,9 @@ def build_etf_fund_analysis_messages(cleaned: dict[str, Any]) -> list[dict[str, 
         "`汇总要点`用于最终投资结论汇总，需说明ETF跟踪对象、收益风险特征、持仓暴露、规模流动性"
         "以及当前清洗版本仍待补充的场内交易数据，不要超过1000字。"
         "不要使用英文字段名，不要输出用户难懂的技术字段名（如`top_weight_sum_sample`、`JZZZL`），"
-        "可以保留通用ETF术语（跟踪指数、规模、行业暴露、折溢价等）。\n\n"
+        "可以保留通用ETF术语（跟踪指数、规模、行业暴露、折溢价等）。"
+        "涉及金融专业术语（英文缩写或指标名）时，每次出现都必须在术语后用半角括号附中文解释，"
+        "例如`ETF(交易型开放式指数基金)`、`IOPV(基金净值估算)`、`AUM(资产管理规模)`、`PE_TTM(滚动市盈率)`；中文术语无需重复解释。\n\n"
         f"{json.dumps(context, ensure_ascii=False, indent=2)}"
     )
     return [
@@ -203,7 +205,9 @@ def build_etf_fund_module_messages(cleaned: dict[str, Any]) -> list[dict[str, st
         "`汇总要点`用于最终ETF投资结论汇总，需围绕本子模块在ETF投资决策中的角色写成短句列表，"
         "保留关键原始数值，不要超过700字。"
         "不要使用英文字段名，不要输出用户难懂的技术字段名（如`top_weight_sum_sample`、`JZZZL`），"
-        "可以保留通用ETF术语（跟踪指数、规模、行业暴露、折溢价等）。\n\n"
+        "可以保留通用ETF术语（跟踪指数、规模、行业暴露、折溢价等）。"
+        "涉及金融专业术语（英文缩写或指标名）时，每次出现都必须在术语后用半角括号附中文解释，"
+        "例如`ETF(交易型开放式指数基金)`、`IOPV(基金净值估算)`、`AUM(资产管理规模)`、`PE_TTM(滚动市盈率)`；中文术语无需重复解释。\n\n"
         f"{json.dumps(context, ensure_ascii=False, indent=2)}"
     )
     return [
