@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from llm import DEFAULT_MODEL, chat_completion, parse_llm_json
+from llm import DEFAULT_MODEL, cached_text, chat_json, text_block
 
 MODEL_NAME = DEFAULT_MODEL
+EXPECTED_KEYS = ("综合评分", "简短结论", "主要依据", "风险提示", "汇总要点")
 
 
 def build_valuation_analysis_context(cleaned: dict[str, Any]) -> dict[str, Any]:
@@ -23,7 +24,7 @@ def build_valuation_analysis_context(cleaned: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_valuation_analysis_messages(cleaned: dict[str, Any]) -> list[dict[str, str]]:
+def build_valuation_analysis_messages(cleaned: dict[str, Any]) -> list[dict[str, Any]]:
     context = build_valuation_analysis_context(cleaned)
     system_prompt = (
         "你是专业的A股估值分析助手。"
@@ -31,7 +32,7 @@ def build_valuation_analysis_messages(cleaned: dict[str, Any]) -> list[dict[str,
         "评分要标准化、可复核，并尽量引用输入中的原始指标值。"
         "只输出JSON对象，不要输出多余文本。"
     )
-    user_prompt = (
+    user_static = (
         "请根据下面的估值清洗数据输出JSON，字段必须使用中文："
         "`综合评分`、`简短结论`、`主要依据`、`风险提示`、`汇总要点`。"
         "`综合评分`必须是0-100之间的数字，越适合买入分数越高，并满足以下分数与结论的对齐区间："
@@ -49,24 +50,23 @@ def build_valuation_analysis_messages(cleaned: dict[str, Any]) -> list[dict[str,
         "保留关键原始数值，不要超过1000字。"
         "字段值中可使用通用金融术语，但JSON键名必须全部使用上述中文键名。"
         "涉及金融专业术语（英文缩写或指标名）时，每次出现都必须在术语后用半角括号附中文解释，"
-        "例如`PE_TTM(滚动市盈率)`、`PB(市净率)`、`PS(市销率)`、`PEG(市盈率相对盈利增长比率)`、`PCF(市现率)`；中文术语无需重复解释。\n\n"
-        f"{json.dumps(context, ensure_ascii=False, indent=2)}"
+        "例如`PE_TTM(滚动市盈率)`、`PB(市净率)`、`PS(市销率)`、`PEG(市盈率相对盈利增长比率)`、`PCF(市现率)`；中文术语无需重复解释。"
     )
+    user_dynamic = json.dumps(context, ensure_ascii=False, indent=2)
     return [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt},
+        {"role": "user", "content": [cached_text(user_static), text_block(user_dynamic)]},
     ]
 
 
 def analyze_valuation(cleaned: dict[str, Any]) -> dict[str, Any]:
-    response = chat_completion(
+    analysis = chat_json(
         build_valuation_analysis_messages(cleaned),
         model=MODEL_NAME,
         response_format={"type": "json_object"},
         temperature=0.2,
+        expected_keys=EXPECTED_KEYS,
     )
-    content = response.choices[0].message.content or "{}"
-    analysis = parse_llm_json(content)
     return {
         "module": "valuation",
         "stock_code": cleaned.get("stock_code"),

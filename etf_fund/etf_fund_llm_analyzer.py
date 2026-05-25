@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from llm import DEFAULT_MODEL, chat_completion, parse_llm_json
+from llm import DEFAULT_MODEL, cached_text, chat_json, text_block
 
 
 MODEL_NAME = DEFAULT_MODEL
+EXPECTED_KEYS = ("综合评分", "简短结论", "主要依据", "风险提示", "汇总要点")
 
 ETF_MODULE_LABELS = {
     "etf_product_index": "产品与指数定位",
@@ -108,7 +109,7 @@ def build_etf_fund_analysis_context(cleaned: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_etf_fund_analysis_messages(cleaned: dict[str, Any]) -> list[dict[str, str]]:
+def build_etf_fund_analysis_messages(cleaned: dict[str, Any]) -> list[dict[str, Any]]:
     context = build_etf_fund_analysis_context(cleaned)
     system_prompt = (
         "你是专业的ETF基金评估助手。"
@@ -116,7 +117,7 @@ def build_etf_fund_analysis_messages(cleaned: dict[str, Any]) -> list[dict[str, 
         "当某些板块数据缺失或样本不足时，应明确降低置信度而不是机械沿用`overall_score`。"
         "只输出JSON对象，不要输出多余文本。"
     )
-    user_prompt = (
+    user_static = (
         "请根据下面的ETF档案摘要输出JSON，字段必须使用中文："
         "`综合评分`、`简短结论`、`主要依据`、`风险提示`、`汇总要点`。"
         "`综合评分`必须是0-100之间的数字，越适合配置该ETF分数越高。\n\n"
@@ -134,24 +135,23 @@ def build_etf_fund_analysis_messages(cleaned: dict[str, Any]) -> list[dict[str, 
         "不要使用英文字段名，不要输出用户难懂的技术字段名（如`top_weight_sum_sample`、`JZZZL`），"
         "可以保留通用ETF术语（跟踪指数、规模、行业暴露、折溢价等）。"
         "涉及金融专业术语（英文缩写或指标名）时，每次出现都必须在术语后用半角括号附中文解释，"
-        "例如`ETF(交易型开放式指数基金)`、`IOPV(基金净值估算)`、`AUM(资产管理规模)`、`PE_TTM(滚动市盈率)`；中文术语无需重复解释。\n\n"
-        f"{json.dumps(context, ensure_ascii=False, indent=2)}"
+        "例如`ETF(交易型开放式指数基金)`、`IOPV(基金净值估算)`、`AUM(资产管理规模)`、`PE_TTM(滚动市盈率)`；中文术语无需重复解释。"
     )
+    user_dynamic = json.dumps(context, ensure_ascii=False, indent=2)
     return [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt},
+        {"role": "user", "content": [cached_text(user_static), text_block(user_dynamic)]},
     ]
 
 
 def analyze_etf_fund(cleaned: dict[str, Any]) -> dict[str, Any]:
-    response = chat_completion(
+    analysis = chat_json(
         build_etf_fund_analysis_messages(cleaned),
         model=MODEL_NAME,
         response_format={"type": "json_object"},
         temperature=0.2,
+        expected_keys=EXPECTED_KEYS,
     )
-    content = response.choices[0].message.content or "{}"
-    analysis = parse_llm_json(content)
     return {
         "module": "etf_fund",
         "stock_code": cleaned.get("stock_code"),
@@ -179,7 +179,7 @@ def build_etf_fund_module_context(cleaned: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_etf_fund_module_messages(cleaned: dict[str, Any]) -> list[dict[str, str]]:
+def build_etf_fund_module_messages(cleaned: dict[str, Any]) -> list[dict[str, Any]]:
     context = build_etf_fund_module_context(cleaned)
     module_name = context.get("name") or "ETF子模块"
     block_key = str(context.get("block_key") or "")
@@ -191,7 +191,7 @@ def build_etf_fund_module_messages(cleaned: dict[str, Any]) -> list[dict[str, st
         "当数据缺失或样本不足时，应明确降低置信度，而不是给中性高分。"
         "只输出JSON对象，不要输出多余文本。"
     )
-    user_prompt = (
+    user_static = (
         "请根据下面的ETF子模块清洗数据输出JSON，字段必须使用中文："
         "`综合评分`、`简短结论`、`主要依据`、`风险提示`、`汇总要点`。"
         "`综合评分`必须是0-100之间的数字，越适合配置该ETF分数越高。\n\n"
@@ -207,24 +207,23 @@ def build_etf_fund_module_messages(cleaned: dict[str, Any]) -> list[dict[str, st
         "不要使用英文字段名，不要输出用户难懂的技术字段名（如`top_weight_sum_sample`、`JZZZL`），"
         "可以保留通用ETF术语（跟踪指数、规模、行业暴露、折溢价等）。"
         "涉及金融专业术语（英文缩写或指标名）时，每次出现都必须在术语后用半角括号附中文解释，"
-        "例如`ETF(交易型开放式指数基金)`、`IOPV(基金净值估算)`、`AUM(资产管理规模)`、`PE_TTM(滚动市盈率)`；中文术语无需重复解释。\n\n"
-        f"{json.dumps(context, ensure_ascii=False, indent=2)}"
+        "例如`ETF(交易型开放式指数基金)`、`IOPV(基金净值估算)`、`AUM(资产管理规模)`、`PE_TTM(滚动市盈率)`；中文术语无需重复解释。"
     )
+    user_dynamic = json.dumps(context, ensure_ascii=False, indent=2)
     return [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt},
+        {"role": "user", "content": [cached_text(user_static), text_block(user_dynamic)]},
     ]
 
 
 def analyze_etf_fund_module(cleaned: dict[str, Any]) -> dict[str, Any]:
-    response = chat_completion(
+    analysis = chat_json(
         build_etf_fund_module_messages(cleaned),
         model=MODEL_NAME,
         response_format={"type": "json_object"},
         temperature=0.2,
+        expected_keys=EXPECTED_KEYS,
     )
-    content = response.choices[0].message.content or "{}"
-    analysis = parse_llm_json(content)
     return {
         "module": cleaned.get("module"),
         "stock_code": cleaned.get("stock_code"),

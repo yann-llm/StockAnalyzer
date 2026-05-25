@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from llm import DEFAULT_MODEL, chat_completion, parse_llm_json
+from llm import DEFAULT_MODEL, cached_text, chat_json, text_block
 
 MODEL_NAME = DEFAULT_MODEL
+EXPECTED_KEYS = ("最终评分", "投资结论", "操作建议", "核心依据", "主要风险", "仓位建议")
 
 MODULE_LABELS = {
     "stockcomment": "千股千评",
@@ -69,7 +70,7 @@ def build_final_evaluation_context(
 def build_final_evaluation_messages(
     stock_code: str,
     module_analyses: dict[str, dict[str, Any]],
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     context = build_final_evaluation_context(stock_code, module_analyses)
     is_etf = context.get("security_type") == "etf"
     system_prompt = (
@@ -97,7 +98,7 @@ def build_final_evaluation_messages(
         if is_etf
         else "若公告风险或财务现金流存在重大负面事项，应降低最终评分；若估值便宜但基本面或风险不匹配，不要机械给高分。"
     )
-    user_prompt = (
+    user_static = (
         "请根据下面各子模块的`汇总要点`和`主要依据`输出最终汇总评估JSON，字段必须使用中文："
         "`最终评分`、`投资结论`、`操作建议`、`核心依据`、`主要风险`、`仓位建议`。"
         "`最终评分`必须是0-100之间的数字，越适合买入分数越高。"
@@ -112,24 +113,23 @@ def build_final_evaluation_messages(
         "请把完整判断放入上述评价字段中，不要额外输出未要求的字段。"
         "字段值中可使用通用金融术语，但JSON键名必须全部使用上述中文键名。"
         "涉及金融专业术语（英文缩写或指标名）时，每次出现都必须在术语后用半角括号附中文解释，"
-        "例如`PE_TTM(滚动市盈率)`、`PB(市净率)`、`ROE(净资产收益率)`、`MACD(指数平滑异同移动平均线)`、`ETF(交易型开放式指数基金)`；中文术语无需重复解释。\n\n"
-        f"{json.dumps(context, ensure_ascii=False, indent=2)}"
+        "例如`PE_TTM(滚动市盈率)`、`PB(市净率)`、`ROE(净资产收益率)`、`MACD(指数平滑异同移动平均线)`、`ETF(交易型开放式指数基金)`；中文术语无需重复解释。"
     )
+    user_dynamic = json.dumps(context, ensure_ascii=False, indent=2)
     return [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt},
+        {"role": "user", "content": [cached_text(user_static), text_block(user_dynamic)]},
     ]
 
 
 def analyze_final_evaluation(stock_code: str, module_analyses: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    response = chat_completion(
+    analysis = chat_json(
         build_final_evaluation_messages(stock_code, module_analyses),
         model=MODEL_NAME,
         response_format={"type": "json_object"},
         temperature=0.2,
+        expected_keys=EXPECTED_KEYS,
     )
-    content = response.choices[0].message.content or "{}"
-    analysis = parse_llm_json(content)
     return {
         "module": "final_evaluation",
         "stock_code": stock_code,
