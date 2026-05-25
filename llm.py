@@ -1,4 +1,4 @@
-"""Shared LLM SDK helpers with OpenAI and Anthropic provider support."""
+"""Shared LLM SDK helpers with OpenAI, Anthropic, and DeepSeek provider support."""
 
 from __future__ import annotations
 
@@ -18,14 +18,46 @@ DEFAULT_CONFIG_PATH = PROJECT_DIR / "llm_config.json"
 DEFAULT_PROVIDER = "openai"
 DEFAULT_OPENAI_MODEL = "gpt-5.5"
 DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-5"
+DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash"
+DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 API_KEY_ENV = "MY_API_KEY"
 BASE_URL_ENV = "MY_BASE_URL"
 ANTHROPIC_API_KEY_ENV = "ANTHROPIC_API_KEY"
 ANTHROPIC_BASE_URL_ENV = "ANTHROPIC_BASE_URL"
+DEEPSEEK_API_KEY_ENV = "DEEPSEEK_API_KEY"
+DEEPSEEK_BASE_URL_ENV = "DEEPSEEK_BASE_URL"
 TIMEOUT_ENV = "MY_LLM_TIMEOUT_SECONDS"
 MAX_RETRIES_ENV = "MY_LLM_MAX_RETRIES"
 DEFAULT_TIMEOUT_SECONDS = 300
 DEFAULT_MAX_RETRIES = 0
+
+# Per-provider defaults: model, api_key env name, base_url env name, fallback base_url.
+# DeepSeek uses the OpenAI SDK shape but with its own endpoint, so OpenAI-compatible
+# providers share the same client code path while keeping isolated defaults here.
+_PROVIDER_DEFAULTS: dict[str, dict[str, Any]] = {
+    "openai": {
+        "model": DEFAULT_OPENAI_MODEL,
+        "api_key_env": API_KEY_ENV,
+        "base_url_env": BASE_URL_ENV,
+        "default_base_url": None,
+    },
+    "anthropic": {
+        "model": DEFAULT_ANTHROPIC_MODEL,
+        "api_key_env": ANTHROPIC_API_KEY_ENV,
+        "base_url_env": ANTHROPIC_BASE_URL_ENV,
+        "default_base_url": None,
+    },
+    "deepseek": {
+        "model": DEFAULT_DEEPSEEK_MODEL,
+        "api_key_env": DEEPSEEK_API_KEY_ENV,
+        "base_url_env": DEEPSEEK_BASE_URL_ENV,
+        "default_base_url": DEFAULT_DEEPSEEK_BASE_URL,
+    },
+}
+
+# Providers whose wire protocol matches OpenAI Chat Completions and can therefore
+# share `get_openai_client` / `chat.completions.create`.
+_OPENAI_COMPATIBLE_PROVIDERS = frozenset({"openai", "deepseek"})
 
 Message = dict[str, str]
 
@@ -36,6 +68,10 @@ def _provider_config(payload: dict[str, Any], provider: str) -> dict[str, Any]:
         return providers[provider]
     nested = payload.get(provider)
     return nested if isinstance(nested, dict) else {}
+
+
+def _provider_defaults(provider: str) -> dict[str, Any]:
+    return _PROVIDER_DEFAULTS.get(provider, _PROVIDER_DEFAULTS[DEFAULT_PROVIDER])
 
 
 def _configured_default_model() -> str:
@@ -49,7 +85,7 @@ def _configured_default_model() -> str:
             payload = {}
     provider = str(payload.get("provider") or os.getenv("LLM_PROVIDER") or DEFAULT_PROVIDER).strip().lower()
     provider_payload = _provider_config(payload, provider)
-    default_model = DEFAULT_ANTHROPIC_MODEL if provider == "anthropic" else DEFAULT_OPENAI_MODEL
+    default_model = _provider_defaults(provider)["model"]
     return str(provider_payload.get("model") or payload.get("model") or os.getenv("LLM_MODEL") or default_model)
 
 
@@ -97,18 +133,17 @@ def _required(value: str | None, label: str) -> str:
 def get_llm_config() -> LlmConfig:
     payload = _read_config_file()
     provider = str(payload.get("provider") or os.getenv("LLM_PROVIDER") or DEFAULT_PROVIDER).strip().lower()
-    if provider not in {"openai", "anthropic"}:
-        raise RuntimeError(f"Unsupported LLM provider: {provider}")
+    if provider not in _PROVIDER_DEFAULTS:
+        supported = ", ".join(sorted(_PROVIDER_DEFAULTS))
+        raise RuntimeError(f"Unsupported LLM provider: {provider} (supported: {supported})")
 
     provider_payload = _provider_config(payload, provider)
-    default_model = DEFAULT_ANTHROPIC_MODEL if provider == "anthropic" else DEFAULT_OPENAI_MODEL
-    api_key_env = ANTHROPIC_API_KEY_ENV if provider == "anthropic" else API_KEY_ENV
-    base_url_env = ANTHROPIC_BASE_URL_ENV if provider == "anthropic" else BASE_URL_ENV
-    model = str(_config_value(provider_payload, payload, "model") or os.getenv("LLM_MODEL") or default_model)
+    defaults = _provider_defaults(provider)
+    model = str(_config_value(provider_payload, payload, "model") or os.getenv("LLM_MODEL") or defaults["model"])
     timeout = float(_config_value(provider_payload, payload, "timeout", TIMEOUT_ENV) or DEFAULT_TIMEOUT_SECONDS)
     max_retries = int(_config_value(provider_payload, payload, "max_retries", MAX_RETRIES_ENV) or DEFAULT_MAX_RETRIES)
-    api_key = _config_value(provider_payload, payload, "api_key", api_key_env)
-    base_url = _config_value(provider_payload, payload, "base_url", base_url_env)
+    api_key = _config_value(provider_payload, payload, "api_key", defaults["api_key_env"])
+    base_url = _config_value(provider_payload, payload, "base_url", defaults["base_url_env"]) or defaults["default_base_url"]
 
     return LlmConfig(
         provider=provider,
@@ -129,8 +164,9 @@ def get_openai_client() -> Any:
     from openai import OpenAI
 
     config = get_llm_config()
+    api_key_label = f"{config.provider}.api_key or {_provider_defaults(config.provider)['api_key_env']}"
     return OpenAI(
-        api_key=_required(config.api_key, "openai.api_key or MY_API_KEY"),
+        api_key=_required(config.api_key, api_key_label),
         base_url=config.base_url,
         timeout=config.timeout,
         max_retries=config.max_retries,
@@ -157,7 +193,9 @@ def get_llm_client() -> Any:
     config = get_llm_config()
     if config.provider == "anthropic":
         return get_anthropic_client()
-    return get_openai_client()
+    if config.provider in _OPENAI_COMPATIBLE_PROVIDERS:
+        return get_openai_client()
+    raise RuntimeError(f"Unsupported LLM provider: {config.provider}")
 
 
 def chat_completion(
@@ -171,6 +209,8 @@ def chat_completion(
     selected_model = model or config.model
     if config.provider == "anthropic":
         return _anthropic_chat_completion(messages, model=selected_model, **kwargs)
+    if config.provider not in _OPENAI_COMPATIBLE_PROVIDERS:
+        raise RuntimeError(f"Unsupported LLM provider: {config.provider}")
     kwargs.setdefault("timeout", config.timeout)
     return get_openai_client().chat.completions.create(
         model=selected_model,
