@@ -183,12 +183,15 @@ def get_openai_client() -> Any:
 
     config = get_llm_config()
     api_key_label = f"{config.provider}.api_key or {_provider_defaults(config.provider)['api_key_env']}"
-    return OpenAI(
-        api_key=_required(config.api_key, api_key_label),
-        base_url=config.base_url,
-        timeout=config.timeout,
-        max_retries=config.max_retries,
-    )
+    kwargs: dict[str, Any] = {
+        "api_key": _required(config.api_key, api_key_label),
+        "base_url": config.base_url,
+        "timeout": config.timeout,
+        "max_retries": config.max_retries,
+    }
+    if config.base_url:
+        kwargs["http_client"] = _build_direct_http_client(config.timeout)
+    return OpenAI(**kwargs)
 
 
 @lru_cache(maxsize=1)
@@ -203,7 +206,21 @@ def get_anthropic_client() -> Any:
     }
     if config.base_url:
         kwargs["base_url"] = config.base_url
+        kwargs["http_client"] = _build_direct_http_client(config.timeout)
     return Anthropic(**kwargs)
+
+
+def _build_direct_http_client(timeout: float) -> Any:
+    """Return an httpx.Client that ignores HTTP/HTTPS/ALL_PROXY env vars.
+
+    Used when ``base_url`` points at a private API gateway (e.g. domestic
+    Anthropic proxy services) — these endpoints are reachable directly and
+    should not be tunneled through a desktop SOCKS/HTTP proxy, which would
+    require optional extras like ``httpx[socks]`` and may even be offline.
+    """
+    import httpx
+
+    return httpx.Client(timeout=timeout, trust_env=False)
 
 
 def get_llm_client() -> Any:
