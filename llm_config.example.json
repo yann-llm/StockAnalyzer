@@ -12,6 +12,11 @@
       "model": "claude-sonnet-4-5",
       "api_key": "你的 Anthropic API Key",
       "base_url": null
+    },
+    "deepseek": {
+      "model": "deepseek-v4-flash",
+      "api_key": "你的 DeepSeek API Key",
+      "base_url": null
     }
   }
 }
