@@ -25,9 +25,27 @@ ANTHROPIC_BASE_URL_ENV = "ANTHROPIC_BASE_URL"
 TIMEOUT_ENV = "MY_LLM_TIMEOUT_SECONDS"
 MAX_RETRIES_ENV = "MY_LLM_MAX_RETRIES"
 DEFAULT_TIMEOUT_SECONDS = 300
-DEFAULT_MAX_RETRIES = 0
+DEFAULT_MAX_RETRIES = 2
+DEFAULT_MAX_TOKENS = 8192
+# Models that reject the `temperature` parameter (e.g. extended-thinking / reasoning variants).
+# 通配匹配模型名（substring，小写比较）。其他模型一律透传 temperature，让 caller 决定确定性。
+TEMPERATURE_REJECT_MODELS_ENV = "MY_LLM_TEMPERATURE_REJECT_MODELS"
+DEFAULT_TEMPERATURE_REJECT_MODELS: tuple[str, ...] = ("opus-4-7",)
 
 Message = dict[str, str]
+
+
+@lru_cache(maxsize=1)
+def _temperature_reject_patterns() -> tuple[str, ...]:
+    raw = os.getenv(TEMPERATURE_REJECT_MODELS_ENV)
+    if raw is None:
+        return DEFAULT_TEMPERATURE_REJECT_MODELS
+    return tuple(p.strip().lower() for p in raw.split(",") if p.strip())
+
+
+def _model_rejects_temperature(model: str) -> bool:
+    name = (model or "").lower()
+    return any(p in name for p in _temperature_reject_patterns())
 
 
 def _provider_config(payload: dict[str, Any], provider: str) -> dict[str, Any]:
@@ -174,9 +192,21 @@ def chat_completion(
     kwargs.setdefault("timeout", config.timeout)
     return get_openai_client().chat.completions.create(
         model=selected_model,
-        messages=list(messages),
+        messages=[_flatten_message_for_openai(m) for m in messages],
         **kwargs,
     )
+
+
+def _flatten_message_for_openai(message: dict[str, Any]) -> dict[str, Any]:
+    """OpenAI chat completions take string content; collapse Anthropic-style block lists.
+
+    Cache markers (``cache_control``) are dropped — only Anthropic acts on them.
+    """
+    content = message.get("content")
+    if not isinstance(content, list):
+        return dict(message)
+    text_parts = [block.get("text", "") for block in content if isinstance(block, dict) and block.get("type") == "text"]
+    return {**message, "content": "\n\n".join(text_parts)}
 
 
 def _anthropic_chat_completion(
@@ -185,21 +215,24 @@ def _anthropic_chat_completion(
     model: str,
     **kwargs: Any,
 ) -> Any:
-    system_parts: list[str] = []
+    system_blocks: list[dict[str, Any]] = []
     anthropic_messages: list[dict[str, Any]] = []
     for message in messages:
         role = message.get("role", "user")
         content = message.get("content", "")
         if role == "system":
-            system_parts.append(content)
+            system_blocks.extend(_to_anthropic_text_blocks(content))
         else:
-            anthropic_messages.append({"role": "assistant" if role == "assistant" else "user", "content": content})
+            anthropic_messages.append({
+                "role": "assistant" if role == "assistant" else "user",
+                "content": content if isinstance(content, list) else content,
+            })
 
     kwargs.pop("response_format", None)
-    # 部分代理或推理型模型（如 opus-4-7）拒绝 temperature，统一在此处丢弃。
-    kwargs.pop("temperature", None)
+    if _model_rejects_temperature(model):
+        kwargs.pop("temperature", None)
     timeout = kwargs.pop("timeout", get_llm_config().timeout)
-    max_tokens = kwargs.pop("max_tokens", None) or kwargs.pop("max_completion_tokens", None) or 2048
+    max_tokens = kwargs.pop("max_tokens", None) or kwargs.pop("max_completion_tokens", None) or DEFAULT_MAX_TOKENS
     if "stream" in kwargs:
         kwargs.pop("stream")
 
@@ -210,11 +243,32 @@ def _anthropic_chat_completion(
         "timeout": timeout,
         **kwargs,
     }
-    if system_parts:
-        request["system"] = "\n\n".join(system_parts)
+    if system_blocks:
+        # Anthropic accepts either a string or a list of text blocks for `system`.
+        # 列表形式才能保留 cache_control，长度=1 时退化为单 block。
+        request["system"] = system_blocks
 
     response = get_anthropic_client().messages.create(**request)
     return _openai_compatible_completion(response)
+
+
+def _to_anthropic_text_blocks(content: Any) -> list[dict[str, Any]]:
+    if isinstance(content, list):
+        return [block for block in content if isinstance(block, dict)]
+    return [{"type": "text", "text": str(content)}]
+
+
+def cached_text(text: str) -> dict[str, Any]:
+    """Wrap a static text segment as an Anthropic block with ephemeral cache_control.
+
+    For OpenAI the block list is flattened back to a plain string in
+    ``_flatten_message_for_openai`` — cache hints are silently ignored.
+    """
+    return {"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}
+
+
+def text_block(text: str) -> dict[str, Any]:
+    return {"type": "text", "text": text}
 
 
 def _openai_compatible_completion(response: Any) -> Any:
@@ -248,6 +302,75 @@ def chat_text(
     completion = chat_completion(messages, model=model, **kwargs)
     message = completion.choices[0].message
     return message.content or ""
+
+
+class LlmResponseError(RuntimeError):
+    """Raised when an LLM response fails validation (empty / non-JSON / missing keys)."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        raw_text: str = "",
+        model: str | None = None,
+        expected_keys: Sequence[str] | None = None,
+        missing_keys: Sequence[str] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.raw_text = raw_text
+        self.model = model
+        self.expected_keys = list(expected_keys) if expected_keys else None
+        self.missing_keys = list(missing_keys) if missing_keys else None
+
+
+def _preview(text: str, limit: int = 300) -> str:
+    snippet = text.strip().replace("\n", "\\n")
+    return snippet if len(snippet) <= limit else snippet[:limit] + "...(truncated)"
+
+
+def chat_json(
+    messages: Sequence[Message],
+    *,
+    model: str | None = None,
+    expected_keys: Sequence[str] | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Call the LLM and validate that the response is a JSON object.
+
+    Raises LlmResponseError when the model returns empty content, output that
+    cannot be parsed as JSON, a JSON value that is not an object, or an object
+    missing any of the ``expected_keys``. The original text is preserved on the
+    exception so callers (and ``main.py`` failure paths) can surface it.
+    """
+    completion = chat_completion(messages, model=model, **kwargs)
+    used_model = getattr(completion, "model", None) or model
+    content = (completion.choices[0].message.content or "").strip()
+
+    if not content:
+        raise LlmResponseError("LLM 返回空内容", raw_text="", model=used_model)
+
+    parsed = parse_llm_json(content)
+    failure_keys = {"raw_text", "raw_value"}
+    if parsed.keys() & failure_keys:
+        reason = "LLM 响应不是 JSON 对象" if "raw_value" in parsed else "LLM 响应无法解析为 JSON"
+        raise LlmResponseError(
+            f"{reason}: {_preview(content)}",
+            raw_text=content,
+            model=used_model,
+        )
+
+    if expected_keys:
+        missing = [key for key in expected_keys if key not in parsed]
+        if missing:
+            raise LlmResponseError(
+                f"LLM 响应缺少必需字段 {missing}: {_preview(content)}",
+                raw_text=content,
+                model=used_model,
+                expected_keys=expected_keys,
+                missing_keys=missing,
+            )
+
+    return parsed
 
 
 def _strip_code_fence(text: str) -> str:
